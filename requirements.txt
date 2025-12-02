@@ -1,0 +1,29 @@
+# Django Core
+Django
+djangorestframework
+
+# Authentication
+djangorestframework-simplejwt
+
+# Database
+psycopg2-binary
+PyMySQL
+
+# Async Tasks
+celery
+redis
+
+# Payment
+stripe
+
+# CORS
+django-cors-headers
+
+# Image Processing
+Pillow
+
+# Environment Variables
+python-decouple
+
+# Email
+django-ses

@@ -1,0 +1,3 @@
+"""
+Administrators app - Administrator management.
+"""
