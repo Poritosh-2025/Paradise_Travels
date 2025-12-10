@@ -6,22 +6,14 @@ from django.db import models
 from django.conf import settings
 
 
-class Subscription(models.Model):
+class Plan(models.Model):
     """
-    User subscription management.
+    Subscription plan configuration.
     """
-    PLAN_CHOICES = [
+    PLAN_TYPE_CHOICES = [
         ('basic', 'Basic'),
         ('premium', 'Premium'),
         ('pro', 'Pro'),
-    ]
-    
-    STATUS_CHOICES = [
-        ('active', 'Active'),
-        ('cancelled', 'Cancelled'),
-        ('past_due', 'Past Due'),
-        ('unpaid', 'Unpaid'),
-        ('trialing', 'Trialing'),
     ]
     
     BILLING_CYCLE_CHOICES = [
@@ -30,18 +22,79 @@ class Subscription(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    plan_id = models.CharField(max_length=50, unique=True)  # basic, premium, pro
+    name = models.CharField(max_length=100)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default='EUR')
+    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='monthly')
+    stripe_price_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Features stored as JSON
+    itineraries_per_month = models.CharField(max_length=20, default='1')  # number or 'unlimited'
+    videos_per_month = models.IntegerField(default=0)
+    video_price = models.DecimalField(max_digits=10, decimal_places=2, default=5.99)
+    video_quality = models.CharField(max_length=20, default='standard')  # standard, high
+    chatbot_access = models.BooleanField(default=True)
+    customization = models.BooleanField(default=True)
+    social_sharing = models.BooleanField(default=True)
+    exclusive_deals = models.BooleanField(default=False)
+    priority_support = models.BooleanField(default=False)
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'plans'
+        ordering = ['price']
+
+    def __str__(self):
+        return f"{self.name} - {self.price} {self.currency}"
+
+    def get_features(self):
+        """Return features as dictionary."""
+        return {
+            'itineraries_per_month': self.itineraries_per_month,
+            'videos_per_month': self.videos_per_month,
+            'video_price': float(self.video_price),
+            'video_quality': self.video_quality,
+            'chatbot_access': self.chatbot_access,
+            'customization': self.customization,
+            'social_sharing': self.social_sharing,
+            'exclusive_deals': self.exclusive_deals,
+            'priority_support': self.priority_support,
+        }
+
+
+class Subscription(models.Model):
+    """
+    User subscription management.
+    """
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('cancelled', 'Cancelled'),
+        ('past_due', 'Past Due'),
+        ('unpaid', 'Unpaid'),
+        ('trialing', 'Trialing'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='subscription'
     )
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='subscriptions'
+    )
     
     stripe_subscription_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
     stripe_price_id = models.CharField(max_length=255, blank=True)
     
-    plan_type = models.CharField(max_length=20, choices=PLAN_CHOICES, default='basic')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
-    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='monthly')
     
     current_period_start = models.DateTimeField(null=True, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True)
@@ -59,7 +112,8 @@ class Subscription(models.Model):
         db_table = 'subscriptions'
 
     def __str__(self):
-        return f"{self.user.email} - {self.plan_type}"
+        plan_name = self.plan.name if self.plan else 'No Plan'
+        return f"{self.user.email} - {plan_name}"
 
 
 class Payment(models.Model):
@@ -93,7 +147,7 @@ class Payment(models.Model):
         related_name='payments'
     )
     
-    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, unique=True, null=True)
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     stripe_invoice_id = models.CharField(max_length=255, blank=True, null=True)
     
     payment_type = models.CharField(max_length=20, choices=PAYMENT_TYPE_CHOICES, default='subscription')
@@ -105,6 +159,7 @@ class Payment(models.Model):
     description = models.TextField(blank=True)
     receipt_url = models.URLField(blank=True, null=True)
     
+    payment_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

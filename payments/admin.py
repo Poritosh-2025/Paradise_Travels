@@ -2,19 +2,26 @@
 Admin configuration for payments.
 """
 from django.contrib import admin
-from .models import Subscription, Payment, UsageTracking, WebhookEvent, VideoPurchase
+from .models import Plan, Subscription, Payment, UsageTracking, WebhookEvent, VideoPurchase
+
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display = ['plan_id', 'name', 'price', 'currency', 'videos_per_month', 'is_active', 'created_at']
+    list_filter = ['is_active', 'billing_cycle']
+    search_fields = ['plan_id', 'name']
 
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = ['user', 'plan_type', 'status', 'current_period_end', 'cancel_at_period_end', 'created_at']
-    list_filter = ['plan_type', 'status', 'cancel_at_period_end']
+    list_display = ['user', 'plan', 'status', 'current_period_end', 'cancel_at_period_end', 'created_at']
+    list_filter = ['status', 'cancel_at_period_end']
     search_fields = ['user__email', 'stripe_subscription_id']
 
 
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
-    list_display = ['user', 'payment_type', 'amount', 'currency', 'status', 'created_at']
+    list_display = ['user', 'payment_type', 'amount', 'currency', 'status', 'payment_date', 'created_at']
     list_filter = ['payment_type', 'status', 'currency']
     search_fields = ['user__email', 'stripe_payment_intent_id']
 

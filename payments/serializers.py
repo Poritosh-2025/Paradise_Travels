@@ -2,20 +2,24 @@
 Serializers for payment and subscription endpoints.
 """
 from rest_framework import serializers
-from .models import Subscription, Payment, UsageTracking, VideoPurchase, WebhookEvent
+from .models import Plan, Subscription, Payment, UsageTracking, VideoPurchase, WebhookEvent
 
 
-class PlanSerializer(serializers.Serializer):
+class PlanSerializer(serializers.ModelSerializer):
     """
-    Serializer for subscription plans.
+    Serializer for plan details.
     """
-    plan_id = serializers.CharField()
-    name = serializers.CharField()
-    price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    currency = serializers.CharField()
-    billing_cycle = serializers.CharField()
-    stripe_price_id = serializers.CharField(required=False)
-    features = serializers.DictField()
+    features = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Plan
+        fields = [
+            'plan_id', 'name', 'price', 'currency', 'billing_cycle',
+            'stripe_price_id', 'features'
+        ]
+
+    def get_features(self, obj):
+        return obj.get_features()
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
@@ -23,6 +27,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
     Serializer for subscription details.
     """
     subscription_id = serializers.UUIDField(source='id', read_only=True)
+    plan_type = serializers.CharField(source='plan.plan_id', read_only=True)
 
     class Meta:
         model = Subscription
@@ -75,6 +80,33 @@ class PaymentSerializer(serializers.ModelSerializer):
             'payment_id', 'payment_type', 'amount', 'currency',
             'status', 'description', 'receipt_url', 'created_at'
         ]
+
+
+class AdminTransactionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for admin transaction list.
+    """
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.email')
+    pay_amount = serializers.SerializerMethodField()
+    payment_status = serializers.CharField(source='status')
+    stripe_payment_id = serializers.CharField(source='stripe_payment_intent_id')
+
+    class Meta:
+        model = Payment
+        fields = [
+            'user_name', 'user_email', 'pay_amount',
+            'payment_date', 'payment_status', 'stripe_payment_id'
+        ]
+
+    def get_user_name(self, obj):
+        return obj.user.name or obj.user.email
+
+    def get_pay_amount(self, obj):
+        return {
+            'amount': float(obj.amount),
+            'currency': obj.currency
+        }
 
 
 class AddPaymentMethodSerializer(serializers.Serializer):

@@ -14,72 +14,51 @@ from core.responses import success_response, error_response, created_response, n
 from core.permissions import IsAdminUser
 from core.pagination import StandardPagination
 from core.utils import get_admin_info
-from .models import Subscription, Payment, UsageTracking, WebhookEvent, VideoPurchase
+from .models import Plan, Subscription, Payment, UsageTracking, WebhookEvent, VideoPurchase
 from .serializers import (
-    SubscriptionSerializer, CreateSubscriptionSerializer,
+    PlanSerializer, SubscriptionSerializer, CreateSubscriptionSerializer,
     UpgradeSubscriptionSerializer, DowngradeSubscriptionSerializer,
-    CancelSubscriptionSerializer, PaymentSerializer, AddPaymentMethodSerializer,
-    VideoPurchaseSerializer, UsageSerializer, WebhookEventSerializer
+    CancelSubscriptionSerializer, PaymentSerializer, AdminTransactionSerializer,
+    AddPaymentMethodSerializer, VideoPurchaseSerializer, UsageSerializer,
+    WebhookEventSerializer
 )
 
 # Configure Stripe
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
-# Plan configurations
-PLANS = {
-    'basic': {
-        'plan_id': 'basic',
-        'name': 'Basic',
-        'price': Decimal('0.00'),
-        'currency': 'EUR',
-        'billing_cycle': 'monthly',
-        'features': {
-            'itineraries_per_month': 1,
+# Video price constant
+VIDEO_PRICE = Decimal('5.99')
+
+
+def get_plan(plan_id):
+    """Get plan by plan_id."""
+    try:
+        return Plan.objects.get(plan_id=plan_id, is_active=True)
+    except Plan.DoesNotExist:
+        return None
+
+
+def get_basic_plan():
+    """Get or create basic plan."""
+    plan, created = Plan.objects.get_or_create(
+        plan_id='basic',
+        defaults={
+            'name': 'Basic',
+            'price': Decimal('0.00'),
+            'currency': 'EUR',
+            'billing_cycle': 'monthly',
+            'itineraries_per_month': '1',
             'videos_per_month': 0,
-            'video_price': 5.99,
-            'chatbot_access': True,
-            'customization': True,
-            'social_sharing': True
-        }
-    },
-    'premium': {
-        'plan_id': 'premium',
-        'name': 'Premium',
-        'price': Decimal('19.99'),
-        'currency': 'EUR',
-        'billing_cycle': 'monthly',
-        'stripe_price_id': settings.STRIPE_PREMIUM_PRICE_ID if hasattr(settings, 'STRIPE_PREMIUM_PRICE_ID') else '',
-        'features': {
-            'itineraries_per_month': 'unlimited',
-            'videos_per_month': 3,
-            'video_price': 5.99,
-            'chatbot_access': True,
-            'customization': True,
-            'social_sharing': True
-        }
-    },
-    'pro': {
-        'plan_id': 'pro',
-        'name': 'Pro',
-        'price': Decimal('39.99'),
-        'currency': 'EUR',
-        'billing_cycle': 'monthly',
-        'stripe_price_id': settings.STRIPE_PRO_PRICE_ID if hasattr(settings, 'STRIPE_PRO_PRICE_ID') else '',
-        'features': {
-            'itineraries_per_month': 'unlimited',
-            'videos_per_month': 5,
-            'video_quality': 'high',
-            'video_price': 5.99,
-            'exclusive_deals': True,
+            'video_price': VIDEO_PRICE,
+            'video_quality': 'standard',
             'chatbot_access': True,
             'customization': True,
             'social_sharing': True,
-            'priority_support': True
+            'exclusive_deals': False,
+            'priority_support': False,
         }
-    }
-}
-
-VIDEO_PRICE = Decimal('5.99')
+    )
+    return plan
 
 
 # ==================== SUBSCRIPTION ENDPOINTS ====================
@@ -92,7 +71,9 @@ class PlansListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return success_response("Plans retrieved", {'plans': list(PLANS.values())})
+        plans = Plan.objects.filter(is_active=True).order_by('price')
+        serializer = PlanSerializer(plans, many=True)
+        return success_response("Plans retrieved", {'plans': serializer.data})
 
 
 class CreateSubscriptionView(APIView):
@@ -112,11 +93,11 @@ class CreateSubscriptionView(APIView):
         payment_method_id = serializer.validated_data['payment_method_id']
         
         # Check if user already has active paid subscription
-        if hasattr(user, 'subscription') and user.subscription.plan_type != 'basic':
+        if hasattr(user, 'subscription') and user.subscription.plan and user.subscription.plan.plan_id != 'basic':
             return error_response("Active subscription already exists", status_code=409)
         
-        plan = PLANS.get(plan_type)
-        if not plan or not plan.get('stripe_price_id'):
+        plan = get_plan(plan_type)
+        if not plan or not plan.stripe_price_id:
             return error_response("Invalid plan or plan not configured")
         
         try:
@@ -145,7 +126,7 @@ class CreateSubscriptionView(APIView):
             # Create subscription
             stripe_subscription = stripe.Subscription.create(
                 customer=user.stripe_customer_id,
-                items=[{'price': plan['stripe_price_id']}],
+                items=[{'price': plan.stripe_price_id}],
                 payment_behavior='default_incomplete',
                 expand=['latest_invoice.payment_intent']
             )
@@ -154,9 +135,9 @@ class CreateSubscriptionView(APIView):
             subscription, created = Subscription.objects.update_or_create(
                 user=user,
                 defaults={
+                    'plan': plan,
                     'stripe_subscription_id': stripe_subscription.id,
-                    'stripe_price_id': plan['stripe_price_id'],
-                    'plan_type': plan_type,
+                    'stripe_price_id': plan.stripe_price_id,
                     'status': 'active',
                     'current_period_start': timezone.datetime.fromtimestamp(
                         stripe_subscription.current_period_start, tz=timezone.utc
@@ -177,7 +158,7 @@ class CreateSubscriptionView(APIView):
                 subscription=subscription,
                 billing_period_start=subscription.current_period_start,
                 billing_period_end=subscription.current_period_end,
-                videos_remaining=plan['features']['videos_per_month']
+                videos_remaining=plan.videos_per_month
             )
             
             return created_response(
@@ -203,20 +184,20 @@ class CurrentSubscriptionView(APIView):
             subscription = user.subscription
         except Subscription.DoesNotExist:
             # Create basic subscription if none exists
+            basic_plan = get_basic_plan()
             subscription = Subscription.objects.create(
                 user=user,
-                plan_type='basic',
+                plan=basic_plan,
                 status='active'
             )
         
         # Get usage data
         usage_data = None
         usage = UsageTracking.objects.filter(user=user).order_by('-created_at').first()
-        if usage:
-            plan = PLANS.get(subscription.plan_type, PLANS['basic'])
+        if usage and subscription.plan:
             usage_data = {
                 'itineraries_generated': usage.itineraries_generated,
-                'itineraries_limit': plan['features']['itineraries_per_month'],
+                'itineraries_limit': subscription.plan.itineraries_per_month,
                 'videos_generated': usage.videos_generated,
                 'videos_remaining': usage.videos_remaining,
                 'billing_period_start': usage.billing_period_start,
@@ -252,13 +233,15 @@ class UpgradeSubscriptionView(APIView):
         except Subscription.DoesNotExist:
             return error_response("No subscription found")
         
+        current_plan_id = subscription.plan.plan_id if subscription.plan else 'basic'
+        
         # Validate upgrade path
         valid_upgrades = {'basic': ['premium', 'pro'], 'premium': ['pro']}
-        if new_plan_type not in valid_upgrades.get(subscription.plan_type, []):
+        if new_plan_type not in valid_upgrades.get(current_plan_id, []):
             return error_response("Invalid upgrade path", status_code=400)
         
-        new_plan = PLANS.get(new_plan_type)
-        if not new_plan or not new_plan.get('stripe_price_id'):
+        new_plan = get_plan(new_plan_type)
+        if not new_plan or not new_plan.stripe_price_id:
             return error_response("Plan not configured")
         
         try:
@@ -269,14 +252,14 @@ class UpgradeSubscriptionView(APIView):
                     subscription.stripe_subscription_id,
                     items=[{
                         'id': stripe_sub['items']['data'][0].id,
-                        'price': new_plan['stripe_price_id']
+                        'price': new_plan.stripe_price_id
                     }],
                     proration_behavior='create_prorations'
                 )
             
             # Update local subscription
-            subscription.plan_type = new_plan_type
-            subscription.stripe_price_id = new_plan['stripe_price_id']
+            subscription.plan = new_plan
+            subscription.stripe_price_id = new_plan.stripe_price_id
             subscription.save()
             
             # Update user
@@ -286,7 +269,7 @@ class UpgradeSubscriptionView(APIView):
             # Update usage tracking
             usage = UsageTracking.objects.filter(user=user).order_by('-created_at').first()
             if usage:
-                usage.videos_remaining = new_plan['features']['videos_per_month']
+                usage.videos_remaining = new_plan.videos_per_month
                 usage.save()
             
             return success_response(
@@ -318,9 +301,11 @@ class DowngradeSubscriptionView(APIView):
         except Subscription.DoesNotExist:
             return error_response("No subscription found")
         
+        current_plan_id = subscription.plan.plan_id if subscription.plan else 'basic'
+        
         # Validate downgrade path
         valid_downgrades = {'pro': ['premium', 'basic'], 'premium': ['basic']}
-        if new_plan_type not in valid_downgrades.get(subscription.plan_type, []):
+        if new_plan_type not in valid_downgrades.get(current_plan_id, []):
             return error_response("Invalid downgrade path", status_code=400)
         
         try:
@@ -333,13 +318,13 @@ class DowngradeSubscriptionView(APIView):
                 subscription.cancel_at_period_end = True
             elif subscription.stripe_subscription_id:
                 # Schedule plan change at period end
-                new_plan = PLANS.get(new_plan_type)
+                new_plan = get_plan(new_plan_type)
                 stripe_sub = stripe.Subscription.retrieve(subscription.stripe_subscription_id)
                 stripe.Subscription.modify(
                     subscription.stripe_subscription_id,
                     items=[{
                         'id': stripe_sub['items']['data'][0].id,
-                        'price': new_plan['stripe_price_id']
+                        'price': new_plan.stripe_price_id
                     }],
                     proration_behavior='none'
                 )
@@ -377,7 +362,7 @@ class CancelSubscriptionView(APIView):
         except Subscription.DoesNotExist:
             return error_response("No subscription found")
         
-        if subscription.plan_type == 'basic':
+        if subscription.plan and subscription.plan.plan_id == 'basic':
             return error_response("Cannot cancel free plan")
         
         try:
@@ -483,9 +468,8 @@ class SetupIntentView(APIView):
 
 class PaymentMethodsView(APIView):
     """
-    Get/Add payment methods.
+    Get payment methods.
     GET /api/payments/methods/
-    POST /api/payments/methods/add/
     """
     permission_classes = [IsAuthenticated]
 
@@ -628,7 +612,8 @@ class VideoPurchaseView(APIView):
                 amount=VIDEO_PRICE,
                 currency='EUR',
                 status='succeeded' if payment_intent.status == 'succeeded' else 'pending',
-                description='Video generation purchase'
+                description='Video generation purchase',
+                payment_date=timezone.now() if payment_intent.status == 'succeeded' else None
             )
             
             # Create video purchase record
@@ -707,9 +692,9 @@ class CurrentUsageView(APIView):
         
         try:
             subscription = user.subscription
-            plan = PLANS.get(subscription.plan_type, PLANS['basic'])
-        except Subscription.DoesNotExist:
-            plan = PLANS['basic']
+            plan = subscription.plan
+        except (Subscription.DoesNotExist, AttributeError):
+            plan = get_basic_plan()
         
         return success_response(
             "Usage retrieved",
@@ -717,15 +702,15 @@ class CurrentUsageView(APIView):
                 'usage': {
                     'billing_period_start': usage.billing_period_start,
                     'billing_period_end': usage.billing_period_end,
-                    'plan_type': plan['plan_id'],
+                    'plan_type': plan.plan_id if plan else 'basic',
                     'itineraries': {
                         'generated': usage.itineraries_generated,
-                        'limit': plan['features']['itineraries_per_month']
+                        'limit': plan.itineraries_per_month if plan else '1'
                     },
                     'videos': {
                         'generated': usage.videos_generated,
                         'remaining': usage.videos_remaining,
-                        'limit': plan['features']['videos_per_month']
+                        'limit': plan.videos_per_month if plan else 0
                     },
                     'chatbot_queries': usage.chatbot_queries,
                     'next_reset_date': usage.billing_period_end
@@ -764,6 +749,148 @@ class UsageHistoryView(APIView):
             })
         
         return success_response("Usage history retrieved", {'usage_history': usage_history})
+
+
+# ==================== ADMIN ENDPOINTS ====================
+
+class AdminTransactionsView(APIView):
+    """
+    Admin: List all payment transactions.
+    GET /api/payments/admin/transactions/
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        admin_user = request.user
+        
+        # Filter parameters
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        
+        queryset = Payment.objects.select_related('user').all()
+        
+        # Apply date filters
+        if start_date:
+            queryset = queryset.filter(created_at__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(created_at__date__lte=end_date)
+        
+        queryset = queryset.order_by('-created_at')
+        
+        # Paginate
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        
+        # Build transaction list with serial numbers
+        start_index = (paginator.page.number - 1) * paginator.get_page_size(request) + 1
+        transactions = []
+        for index, payment in enumerate(page):
+            transactions.append({
+                'sl_no': start_index + index,
+                'user_name': payment.user.name or payment.user.email,
+                'user_email': payment.user.email,
+                'pay_amount': {
+                    'amount': float(payment.amount),
+                    'currency': payment.currency
+                },
+                'payment_date': payment.payment_date,
+                'payment_status': payment.status,
+                'stripe_payment_id': payment.stripe_payment_intent_id or ''
+            })
+        
+        return success_response(
+            "Transactions retrieved",
+            {
+                'admin_info': get_admin_info(admin_user),
+                'pagination': {
+                    'current_page': paginator.page.number,
+                    'total_pages': paginator.page.paginator.num_pages,
+                    'total_transactions': paginator.page.paginator.count,
+                    'page_size': paginator.get_page_size(request),
+                    'has_previous': paginator.page.has_previous(),
+                    'has_next': paginator.page.has_next()
+                },
+                'transactions': transactions
+            }
+        )
+
+
+class AdminSubscriptionsView(APIView):
+    """
+    Admin: List all subscriptions.
+    GET /api/payments/admin/subscriptions/
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        admin_user = request.user
+        status_filter = request.query_params.get('status')
+        plan_filter = request.query_params.get('plan_type')
+        
+        queryset = Subscription.objects.select_related('user', 'plan').all()
+        
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        if plan_filter:
+            queryset = queryset.filter(plan__plan_id=plan_filter)
+        
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        
+        subscriptions = []
+        for sub in page:
+            subscriptions.append({
+                'subscription_id': str(sub.id),
+                'user_email': sub.user.email,
+                'plan_type': sub.plan.plan_id if sub.plan else 'basic',
+                'status': sub.status,
+                'created_at': sub.created_at,
+                'current_period_end': sub.current_period_end
+            })
+        
+        return success_response(
+            "Subscriptions retrieved",
+            {
+                'admin_info': get_admin_info(admin_user),
+                'subscriptions': subscriptions,
+                'pagination': {
+                    'current_page': paginator.page.number,
+                    'total_pages': paginator.page.paginator.num_pages,
+                    'total_items': paginator.page.paginator.count
+                }
+            }
+        )
+
+
+class AdminWebhookEventsView(APIView):
+    """
+    Admin: List webhook events.
+    GET /api/payments/admin/webhooks/events/
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        admin_user = request.user
+        event_type = request.query_params.get('event_type')
+        status = request.query_params.get('status')
+        
+        queryset = WebhookEvent.objects.all()
+        
+        if event_type:
+            queryset = queryset.filter(event_type=event_type)
+        if status:
+            queryset = queryset.filter(processing_status=status)
+        
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        
+        return success_response(
+            "Webhook events retrieved",
+            {
+                'admin_info': get_admin_info(admin_user),
+                'events': WebhookEventSerializer(page, many=True).data
+            }
+        )
 
 
 # ==================== WEBHOOK ENDPOINT ====================
@@ -848,7 +975,7 @@ class StripeWebhookView(APIView):
         try:
             subscription = Subscription.objects.get(stripe_subscription_id=data.id)
             subscription.status = 'cancelled'
-            subscription.plan_type = 'basic'
+            subscription.plan = get_basic_plan()
             subscription.stripe_subscription_id = None
             subscription.save()
             
@@ -874,19 +1001,20 @@ class StripeWebhookView(APIView):
                 amount=Decimal(data.amount_paid) / 100,
                 currency=data.currency.upper(),
                 status='succeeded',
-                description=f"{subscription.plan_type.title()} plan - Monthly",
-                receipt_url=data.hosted_invoice_url
+                description=f"{subscription.plan.name if subscription.plan else 'Subscription'} - Monthly",
+                receipt_url=data.hosted_invoice_url,
+                payment_date=timezone.now()
             )
             
             # Reset usage for new period
-            plan = PLANS.get(subscription.plan_type, PLANS['basic'])
-            UsageTracking.objects.create(
-                user=subscription.user,
-                subscription=subscription,
-                billing_period_start=subscription.current_period_start,
-                billing_period_end=subscription.current_period_end,
-                videos_remaining=plan['features']['videos_per_month']
-            )
+            if subscription.plan:
+                UsageTracking.objects.create(
+                    user=subscription.user,
+                    subscription=subscription,
+                    billing_period_start=subscription.current_period_start,
+                    billing_period_end=subscription.current_period_end,
+                    videos_remaining=subscription.plan.videos_per_month
+                )
         except Subscription.DoesNotExist:
             pass
 
@@ -911,81 +1039,3 @@ class StripeWebhookView(APIView):
             )
         except Subscription.DoesNotExist:
             pass
-
-
-# ==================== ADMIN ENDPOINTS ====================
-
-class AdminSubscriptionsView(APIView):
-    """
-    Admin: List all subscriptions.
-    GET /api/payments/admin/subscriptions/
-    """
-    permission_classes = [IsAuthenticated, IsAdminUser]
-
-    def get(self, request):
-        status_filter = request.query_params.get('status')
-        plan_filter = request.query_params.get('plan_type')
-        
-        queryset = Subscription.objects.all()
-        
-        if status_filter:
-            queryset = queryset.filter(status=status_filter)
-        if plan_filter:
-            queryset = queryset.filter(plan_type=plan_filter)
-        
-        paginator = StandardPagination()
-        page = paginator.paginate_queryset(queryset, request)
-        
-        subscriptions = []
-        for sub in page:
-            subscriptions.append({
-                'subscription_id': str(sub.id),
-                'user_email': sub.user.email,
-                'plan_type': sub.plan_type,
-                'status': sub.status,
-                'created_at': sub.created_at,
-                'current_period_end': sub.current_period_end
-            })
-        
-        return success_response(
-            "Subscriptions retrieved",
-            {
-                'admin_info': get_admin_info(request.user),
-                'subscriptions': subscriptions,
-                'pagination': {
-                    'current_page': paginator.page.number,
-                    'total_pages': paginator.page.paginator.num_pages,
-                    'total_items': paginator.page.paginator.count
-                }
-            }
-        )
-
-
-class AdminWebhookEventsView(APIView):
-    """
-    Admin: List webhook events.
-    GET /api/payments/admin/webhooks/events/
-    """
-    permission_classes = [IsAuthenticated, IsAdminUser]
-
-    def get(self, request):
-        event_type = request.query_params.get('event_type')
-        status = request.query_params.get('status')
-        
-        queryset = WebhookEvent.objects.all()
-        
-        if event_type:
-            queryset = queryset.filter(event_type=event_type)
-        if status:
-            queryset = queryset.filter(processing_status=status)
-        
-        paginator = StandardPagination()
-        page = paginator.paginate_queryset(queryset, request)
-        
-        return success_response(
-            "Webhook events retrieved",
-            {
-                'admin_info': get_admin_info(request.user),
-                'events': WebhookEventSerializer(page, many=True).data
-            }
-        )

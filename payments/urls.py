@@ -15,7 +15,7 @@ from .views import (
     # Webhook
     StripeWebhookView,
     # Admin
-    AdminSubscriptionsView, AdminWebhookEventsView
+    AdminTransactionsView, AdminSubscriptionsView, AdminWebhookEventsView
 )
 
 urlpatterns = [
@@ -44,6 +44,7 @@ urlpatterns = [
     path('webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
     
     # Admin endpoints
+    path('admin/transactions/', AdminTransactionsView.as_view(), name='admin-transactions'),
     path('admin/subscriptions/', AdminSubscriptionsView.as_view(), name='admin-subscriptions'),
     path('admin/webhooks/events/', AdminWebhookEventsView.as_view(), name='admin-webhook-events'),
 ]
