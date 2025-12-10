@@ -50,8 +50,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     phone_number = models.CharField(max_length=20, blank=True)
     profile_picture = models.ImageField(upload_to='profiles/', blank=True, null=True)
     
+    stripe_customer_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
+
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='user')
     subscription_status = models.CharField(max_length=20, choices=SUBSCRIPTION_CHOICES, default='free')
+
+    
     
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
