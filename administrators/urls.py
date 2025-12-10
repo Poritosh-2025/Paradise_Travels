@@ -13,4 +13,6 @@ urlpatterns = [
     path('admins/<uuid:admin_id>/', UpdateAdminView.as_view(), name='update-admin'),
     path('admins/<uuid:admin_id>/disable/', DisableAdminView.as_view(), name='disable-admin'),
     path('admins/<uuid:admin_id>/enable/', EnableAdminView.as_view(), name='enable-admin'),
+    path('admins/<uuid:admin_id>/delete/', DeleteAdminView.as_view(), name='delete-admin'),
+
 ]

@@ -32,15 +32,29 @@ class RegisterSuperAdminView(APIView):
             return error_response("Registration failed", serializer.errors)
         
         user = serializer.save()
+        
+        # Generate and send OTP
+        otp_code = generate_otp()
+        otp = OTP.objects.create(
+            user=user,
+            otp_code=otp_code,
+            otp_type='registration',
+            expires_at=get_otp_expiry()
+        )
+        
+        # Send OTP email (async)
+        
+        send_otp_email.delay(user.email, otp_code, 'registration')
+        
         return created_response(
-            "Super admin registered successfully. Please verify your email.",
+            "Super admin registered successfully. OTP sent to your email.",
             {
                 'user_id': str(user.id),
                 'email': user.email,
-                'role': user.role
+                'role': user.role,
+                'otp_expires_at': otp.expires_at.isoformat()
             }
         )
-
 
 class RegisterView(APIView):
     """
@@ -56,7 +70,7 @@ class RegisterView(APIView):
         
         user = serializer.save()
         
-        # Generate and send OTP
+        # Generate OTP
         otp_code = generate_otp()
         otp = OTP.objects.create(
             user=user,
@@ -65,7 +79,7 @@ class RegisterView(APIView):
             expires_at=get_otp_expiry()
         )
         
-        # Send OTP email (async)
+        # Send OTP email (synchronous - no Celery required)
         send_otp_email.delay(user.email, otp_code, 'registration')
         
         return created_response(
@@ -110,6 +124,7 @@ class ResendOTPView(APIView):
             expires_at=get_otp_expiry()
         )
         
+        # Send OTP email (synchronous)
         send_otp_email.delay(user.email, otp_code, otp_type)
         
         return success_response(
@@ -203,13 +218,13 @@ class LoginView(APIView):
                 status_code=401
             )
         
-        if not user.is_verified and user.role == 'user':
+        if not user.is_verified:
             return error_response(
                 "Email not verified",
                 {"detail": "Please verify your email first"},
                 status_code=401
             )
-        
+            
         # Generate tokens
         refresh = RefreshToken.for_user(user)
         
@@ -224,6 +239,7 @@ class LoginView(APIView):
                     'user_id': str(user.id),
                     'email': user.email,
                     'name': user.name,
+                    'phone':user.phone_number,
                     'role': user.role,
                     'profile_picture': profile_url,
                     'is_verified': user.is_verified
@@ -289,6 +305,7 @@ class PasswordResetRequestView(APIView):
             expires_at=get_otp_expiry()
         )
         
+        # Send OTP email (synchronous)
         send_otp_email.delay(user.email, otp_code, 'password_reset')
         
         return success_response(
@@ -428,7 +445,6 @@ class TokenRefreshView(APIView):
             return error_response("Invalid or expired token", status_code=401)
 
 
-
 class ProfileView(APIView):
     """
     Get and update user profile.
@@ -452,21 +468,6 @@ class ProfileView(APIView):
             return error_response("Invalid request", serializer.errors)
         
         user = serializer.save()
+        profile_serializer = UserProfileSerializer(user, context={'request': request})
         
-        # Build profile picture URL
-        profile_picture_url = None
-        if user.profile_picture:
-            profile_picture_url = request.build_absolute_uri(user.profile_picture.url)
-        
-        return success_response(
-            "Profile updated successfully",
-            {
-                'user_id': str(user.id),
-                'name': user.name,
-                'email': user.email,
-                'phone_number': user.phone_number,
-                'role': user.role,
-                'profile_picture': profile_picture_url,
-                'updated_at': user.updated_at.isoformat()
-            }
-        )
+        return success_response("Profile updated successfully", profile_serializer.data)

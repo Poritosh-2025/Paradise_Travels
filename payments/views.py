@@ -89,6 +89,8 @@ class CreatePaymentIntentView(APIView):
         amount = serializer.validated_data['amount']
         currency = serializer.validated_data['currency']
         subscription_plan = serializer.validated_data['subscription_plan']
+        print("Creating payment intent for amount:", amount, "currency:", currency)
+        print("Subscription plan:", subscription_plan)
         
         try:
             # Create Stripe payment intent
@@ -103,6 +105,7 @@ class CreatePaymentIntentView(APIView):
                     'subscription_plan': subscription_plan
                 }
             )
+            print("Stripe Payment Intent created:", intent.id)
             
             # Create pending payment record
             Payment.objects.create(
@@ -113,6 +116,7 @@ class CreatePaymentIntentView(APIView):
                 stripe_payment_intent_id=intent.id,
                 payment_status='pending'
             )
+            print("Payment record created for intent:", intent.id)
             
             return success_response(
                 "Payment intent created successfully",
@@ -121,7 +125,6 @@ class CreatePaymentIntentView(APIView):
                     'payment_intent_id': intent.id,
                     'amount': float(amount),
                     'currency': currency.upper(),
-                    'publishable_key': settings.STRIPE_PUBLISHABLE_KEY
                 }
             )
         except stripe.error.StripeError as e:

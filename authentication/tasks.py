@@ -7,9 +7,9 @@ from django.conf import settings
 
 
 @shared_task
-def send_otp_email(email, otp_code, otp_type):
+def send_otp_email_task(email, otp_code, otp_type):
     """
-    Send OTP to user email asynchronously.
+    Celery async task to send OTP email.
     """
     if otp_type == 'registration':
         subject = 'Email Verification OTP'
@@ -52,3 +52,26 @@ Admin API Team
     except Exception as e:
         print(f"Error sending email: {e}")
         return False
+
+
+class SendOTPEmail:
+    """
+    OTP Email sender wrapper.
+    Tries Celery async first, falls back to sync if Redis unavailable.
+    """
+    
+    def delay(self, email, otp_code, otp_type):
+        """
+        Send OTP email - async with Celery or sync fallback.
+        """
+        try:
+            # Try async with Celery
+            return send_otp_email_task.delay(email, otp_code, otp_type)
+        except Exception as e:
+            # Redis not available, send synchronously
+            print(f"Celery/Redis unavailable, sending email synchronously: {e}")
+            return send_otp_email_task(email, otp_code, otp_type)
+
+
+# Create instance - use this in views
+send_otp_email = SendOTPEmail()

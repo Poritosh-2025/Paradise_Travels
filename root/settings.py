@@ -2,9 +2,12 @@
 Django settings for admin_api project.
 """
 import os
+from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+
+load_dotenv()
 
 # Build paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -126,7 +129,7 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 100,
+    'PAGE_SIZE': 1000,
 }
 
 # JWT Settings
@@ -156,9 +159,13 @@ CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/
 CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
 
 # Stripe Settings
-STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
-STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY', default='')
-STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
+# Stripe Settings
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
+STRIPE_PREMIUM_PRICE_ID = config('STRIPE_PREMIUM_PRICE_ID', default='')
+STRIPE_PRO_PRICE_ID = config('STRIPE_PRO_PRICE_ID', default='')
+STRIPE_VIDEO_PRICE_ID = config('STRIPE_VIDEO_PRICE_ID', default='')
 
 # OTP Settings
 OTP_EXPIRY_MINUTES = 10

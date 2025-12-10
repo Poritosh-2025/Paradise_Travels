@@ -11,7 +11,7 @@ from .views import (
 urlpatterns = [
     # Registration
     path('register-superadmin/', RegisterSuperAdminView.as_view(), name='register-superadmin'),
-    path('register/', RegisterView.as_view(), name='register'),
+    path('user/register/', RegisterView.as_view(), name='register'),
     
     # OTP
     path('resend-otp/', ResendOTPView.as_view(), name='resend-otp'),

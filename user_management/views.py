@@ -206,7 +206,7 @@ class CancelDeleteUserView(APIView):
             return error_response("Invalid request", serializer.errors)
         
         deletion_token = serializer.validated_data['deletion_token']
-        
+        print("deletion_token",deletion_token)
         try:
             deletion_request = UserDeletionRequest.objects.get(
                 user_id=user_id,
