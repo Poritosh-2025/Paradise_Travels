@@ -169,3 +169,9 @@ STRIPE_VIDEO_PRICE_ID = config('STRIPE_VIDEO_PRICE_ID', default='')
 
 # OTP Settings
 OTP_EXPIRY_MINUTES = 10
+
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:9001',
+    'http://10.10.7.93:9001',
+    'https://e7b95cc97b8d.ngrok-free.app'
+]
