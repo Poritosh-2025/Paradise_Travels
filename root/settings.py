@@ -15,7 +15,29 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Security
 SECRET_KEY = config('SECRET_KEY', default='your-secret-key-change-in-production')
 DEBUG = config('DEBUG', default=True, cast=bool)
+
+
 ALLOWED_HOSTS =['*']
+
+CORS_ALLOW_HEADERS = [
+    'content-type',
+    'authorization',
+    'accept',
+    'origin',
+    'x-requested-with',
+]
+ 
+CORS_ALLOW_METHODS = [
+    'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'
+]
+ 
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = True
+# CORS_ORIGIN_ALLOW_ALL = True
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000'
+]
+
 
 # Application definition
 INSTALLED_APPS = [
@@ -43,9 +65,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -142,8 +164,8 @@ SIMPLE_JWT = {
 }
 
 # CORS Settings
-CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')
+# CORS_ALLOW_ALL_ORIGINS = DEBUG
+# CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')
 
 # Email Settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -163,9 +185,9 @@ CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localho
 STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
-STRIPE_PREMIUM_PRICE_ID = config('STRIPE_PREMIUM_PRICE_ID', default='')
-STRIPE_PRO_PRICE_ID = config('STRIPE_PRO_PRICE_ID', default='')
-STRIPE_VIDEO_PRICE_ID = config('STRIPE_VIDEO_PRICE_ID', default='')
+STRIPE_PREMIUM_PRICE_ID = os.environ.get('STRIPE_PREMIUM_PRICE_ID')
+STRIPE_PRO_PRICE_ID = os.environ.get('STRIPE_PRO_PRICE_ID')
+STRIPE_VIDEO_PRICE_ID = os.environ.get('STRIPE_VIDEO_PRICE_ID')
 
 # OTP Settings
 OTP_EXPIRY_MINUTES = 10
@@ -175,3 +197,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://10.10.7.93:9001',
     'https://e7b95cc97b8d.ngrok-free.app'
 ]
+
+
+ 
+
+ 
