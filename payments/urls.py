@@ -1,50 +1,55 @@
 """
 URL patterns for payment and subscription endpoints.
+Stripe Checkout Session integration.
 """
 from django.urls import path
 from .views import (
-    # Subscription
-    PlansListView, CreateSubscriptionView, CurrentSubscriptionView,
-    UpgradeSubscriptionView, DowngradeSubscriptionView,
-    CancelSubscriptionView, ReactivateSubscriptionView,
-    # Payment
-    SetupIntentView, PaymentMethodsView, AddPaymentMethodView,
-    DeletePaymentMethodView, VideoPurchaseView, PaymentHistoryView,
-    # Usage
-    CurrentUsageView, UsageHistoryView,
+    # Plans
+    PlansListView,
+    # Checkout Sessions
+    CreateCheckoutSessionView,
+    CreateVideoCheckoutSessionView,
+    CheckoutSuccessView,
+    # Subscription Management
+    CurrentSubscriptionView,
+    CancelSubscriptionView,
+    ReactivateSubscriptionView,
+    CreateBillingPortalView,
+    # Usage & History
+    CurrentUsageView,
+    PaymentHistoryView,
     # Webhook
     StripeWebhookView,
     # Admin
-    AdminTransactionsView, AdminSubscriptionsView, AdminWebhookEventsView
+    AdminTransactionsView,
+    AdminSubscriptionsView,
 )
 
 urlpatterns = [
-    # Subscription endpoints
+    # Plans
     path('subscriptions/plans/', PlansListView.as_view(), name='plans-list'),
-    path('subscriptions/create/', CreateSubscriptionView.as_view(), name='create-subscription'),
+    
+    # Checkout Sessions (Stripe handles payment UI)
+    path('checkout/subscription/', CreateCheckoutSessionView.as_view(), name='checkout-subscription'),
+    path('checkout/video/', CreateVideoCheckoutSessionView.as_view(), name='checkout-video'),
+    path('checkout/success/', CheckoutSuccessView.as_view(), name='checkout-success'),
+    
+    # Subscription Management
     path('subscriptions/current/', CurrentSubscriptionView.as_view(), name='current-subscription'),
-    path('subscriptions/upgrade/', UpgradeSubscriptionView.as_view(), name='upgrade-subscription'),
-    path('subscriptions/downgrade/', DowngradeSubscriptionView.as_view(), name='downgrade-subscription'),
     path('subscriptions/cancel/', CancelSubscriptionView.as_view(), name='cancel-subscription'),
     path('subscriptions/reactivate/', ReactivateSubscriptionView.as_view(), name='reactivate-subscription'),
     
-    # Payment endpoints
-    path('setup-intent/', SetupIntentView.as_view(), name='setup-intent'),
-    path('methods/', PaymentMethodsView.as_view(), name='payment-methods'),
-    path('methods/add/', AddPaymentMethodView.as_view(), name='add-payment-method'),
-    path('methods/<str:payment_method_id>/', DeletePaymentMethodView.as_view(), name='delete-payment-method'),
-    path('video-purchase/', VideoPurchaseView.as_view(), name='video-purchase'),
-    path('history/', PaymentHistoryView.as_view(), name='payment-history'),
+    # Billing Portal (Stripe handles UI for managing payment methods, invoices)
+    path('billing-portal/', CreateBillingPortalView.as_view(), name='billing-portal'),
     
-    # Usage endpoints
+    # Usage & History
     path('usage/current/', CurrentUsageView.as_view(), name='current-usage'),
-    path('usage/history/', UsageHistoryView.as_view(), name='usage-history'),
+    path('history/', PaymentHistoryView.as_view(), name='payment-history'),
     
     # Webhook
     path('webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
     
-    # Admin endpoints
+    # Admin
     path('admin/transactions/', AdminTransactionsView.as_view(), name='admin-transactions'),
     path('admin/subscriptions/', AdminSubscriptionsView.as_view(), name='admin-subscriptions'),
-    path('admin/webhooks/events/', AdminWebhookEventsView.as_view(), name='admin-webhook-events'),
 ]

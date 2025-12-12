@@ -1,5 +1,6 @@
 """
 Views for payment and subscription endpoints.
+Stripe Checkout Session integration.
 """
 import stripe
 from decimal import Decimal
@@ -10,17 +11,14 @@ from django.utils.decorators import method_decorator
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from core.responses import success_response, error_response, created_response, not_found_response
+from core.responses import success_response, error_response, created_response
 from core.permissions import IsAdminUser
 from core.pagination import StandardPagination
 from core.utils import get_admin_info
 from .models import Plan, Subscription, Payment, UsageTracking, WebhookEvent, VideoPurchase
 from .serializers import (
-    PlanSerializer, SubscriptionSerializer, CreateSubscriptionSerializer,
-    UpgradeSubscriptionSerializer, DowngradeSubscriptionSerializer,
-    CancelSubscriptionSerializer, PaymentSerializer, AdminTransactionSerializer,
-    AddPaymentMethodSerializer, VideoPurchaseSerializer, UsageSerializer,
-    WebhookEventSerializer
+    PlanSerializer, SubscriptionSerializer, PaymentSerializer,
+    UsageSerializer, WebhookEventSerializer
 )
 
 # Configure Stripe
@@ -76,29 +74,41 @@ class PlansListView(APIView):
         return success_response("Plans retrieved", {'plans': serializer.data})
 
 
-class CreateSubscriptionView(APIView):
+class CreateCheckoutSessionView(APIView):
     """
-    Create new subscription.
-    POST /api/payments/subscriptions/create/
+    Create Stripe Checkout Session for subscription.
+    POST /api/payments/checkout/subscription/
+    
+    Request Body:
+    {
+        "plan_type": "premium" or "pro",
+        "success_url": "https://yoursite.com/success",
+        "cancel_url": "https://yoursite.com/cancel"
+    }
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = CreateSubscriptionSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response("Invalid request", serializer.errors)
+        plan_type = request.data.get('plan_type')
+        success_url = request.data.get('success_url')
+        cancel_url = request.data.get('cancel_url')
         
-        user = request.user
-        plan_type = serializer.validated_data['plan_type']
-        payment_method_id = serializer.validated_data['payment_method_id']
+        if not plan_type:
+            return error_response("plan_type is required")
+        if not success_url or not cancel_url:
+            return error_response("success_url and cancel_url are required")
         
-        # Check if user already has active paid subscription
-        if hasattr(user, 'subscription') and user.subscription.plan and user.subscription.plan.plan_id != 'basic':
-            return error_response("Active subscription already exists", status_code=409)
-        
+        # Validate plan
         plan = get_plan(plan_type)
         if not plan or not plan.stripe_price_id:
             return error_response("Invalid plan or plan not configured")
+        
+        # Check existing subscription
+        user = request.user
+        if hasattr(user, 'subscription'):
+            sub = user.subscription
+            if sub.plan and sub.plan.plan_id != 'basic' and sub.status == 'active':
+                return error_response("You already have an active subscription", status_code=409)
         
         try:
             # Get or create Stripe customer
@@ -111,63 +121,137 @@ class CreateSubscriptionView(APIView):
                 user.stripe_customer_id = customer.id
                 user.save()
             
-            # Attach payment method to customer
-            stripe.PaymentMethod.attach(
-                payment_method_id,
-                customer=user.stripe_customer_id
-            )
-            
-            # Set as default payment method
-            stripe.Customer.modify(
-                user.stripe_customer_id,
-                invoice_settings={'default_payment_method': payment_method_id}
-            )
-            
-            # Create subscription
-            stripe_subscription = stripe.Subscription.create(
+            # Create Checkout Session
+            checkout_session = stripe.checkout.Session.create(
                 customer=user.stripe_customer_id,
-                items=[{'price': plan.stripe_price_id}],
-                payment_behavior='default_incomplete',
-                expand=['latest_invoice.payment_intent']
-            )
-            
-            # Create or update subscription record
-            subscription, created = Subscription.objects.update_or_create(
-                user=user,
-                defaults={
-                    'plan': plan,
-                    'stripe_subscription_id': stripe_subscription.id,
-                    'stripe_price_id': plan.stripe_price_id,
-                    'status': 'active',
-                    'current_period_start': timezone.datetime.fromtimestamp(
-                        stripe_subscription.current_period_start, tz=timezone.utc
-                    ),
-                    'current_period_end': timezone.datetime.fromtimestamp(
-                        stripe_subscription.current_period_end, tz=timezone.utc
-                    )
+                payment_method_types=['card'],
+                line_items=[{
+                    'price': plan.stripe_price_id,
+                    'quantity': 1,
+                }],
+                mode='subscription',
+                success_url=success_url + '?session_id={CHECKOUT_SESSION_ID}',
+                cancel_url=cancel_url,
+                metadata={
+                    'user_id': str(user.id),
+                    'plan_type': plan_type,
                 }
             )
             
-            # Update user subscription status
-            user.subscription_status = plan_type
-            user.save()
-            
-            # Initialize usage tracking
-            UsageTracking.objects.create(
-                user=user,
-                subscription=subscription,
-                billing_period_start=subscription.current_period_start,
-                billing_period_end=subscription.current_period_end,
-                videos_remaining=plan.videos_per_month
-            )
-            
-            return created_response(
-                "Subscription created successfully",
-                {'subscription': SubscriptionSerializer(subscription).data}
+            return success_response(
+                "Checkout session created",
+                {
+                    'checkout_url': checkout_session.url,
+                    'session_id': checkout_session.id
+                }
             )
             
         except stripe.error.StripeError as e:
-            return error_response(f"Payment error: {str(e)}")
+            return error_response(f"Stripe error: {str(e)}")
+
+
+class CreateVideoCheckoutSessionView(APIView):
+    """
+    Create Stripe Checkout Session for video purchase.
+    POST /api/payments/checkout/video/
+    
+    Request Body:
+    {
+        "video_quality": "standard" or "high",
+        "success_url": "https://yoursite.com/success",
+        "cancel_url": "https://yoursite.com/cancel"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        video_quality = request.data.get('video_quality', 'standard')
+        success_url = request.data.get('success_url')
+        cancel_url = request.data.get('cancel_url')
+        
+        if not success_url or not cancel_url:
+            return error_response("success_url and cancel_url are required")
+        
+        user = request.user
+        
+        try:
+            # Get or create Stripe customer
+            if not user.stripe_customer_id:
+                customer = stripe.Customer.create(
+                    email=user.email,
+                    name=user.name or user.email,
+                    metadata={'user_id': str(user.id)}
+                )
+                user.stripe_customer_id = customer.id
+                user.save()
+            
+            # Create Checkout Session for one-time payment
+            checkout_session = stripe.checkout.Session.create(
+                customer=user.stripe_customer_id,
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': {
+                        'currency': 'eur',
+                        'product_data': {
+                            'name': f'AI Video Generation ({video_quality.title()} Quality)',
+                            'description': 'One-time video generation purchase',
+                        },
+                        'unit_amount': int(VIDEO_PRICE * 100),  # Convert to cents
+                    },
+                    'quantity': 1,
+                }],
+                mode='payment',
+                success_url=success_url + '?session_id={CHECKOUT_SESSION_ID}',
+                cancel_url=cancel_url,
+                metadata={
+                    'user_id': str(user.id),
+                    'purchase_type': 'video_generation',
+                    'video_quality': video_quality,
+                }
+            )
+            
+            return success_response(
+                "Checkout session created",
+                {
+                    'checkout_url': checkout_session.url,
+                    'session_id': checkout_session.id
+                }
+            )
+            
+        except stripe.error.StripeError as e:
+            return error_response(f"Stripe error: {str(e)}")
+
+
+class CheckoutSuccessView(APIView):
+    """
+    Verify checkout session success.
+    GET /api/payments/checkout/success/?session_id=xxx
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        session_id = request.query_params.get('session_id')
+        
+        if not session_id:
+            return error_response("session_id is required")
+        
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            
+            if session.payment_status == 'paid':
+                return success_response(
+                    "Payment successful",
+                    {
+                        'session_id': session.id,
+                        'payment_status': session.payment_status,
+                        'customer_email': session.customer_details.email if session.customer_details else None,
+                    }
+                )
+            else:
+                return error_response(f"Payment status: {session.payment_status}")
+                
+        except stripe.error.StripeError as e:
+            return error_response(f"Error: {str(e)}")
 
 
 class CurrentSubscriptionView(APIView):
@@ -213,136 +297,6 @@ class CurrentSubscriptionView(APIView):
         )
 
 
-class UpgradeSubscriptionView(APIView):
-    """
-    Upgrade subscription to higher tier.
-    PUT /api/payments/subscriptions/upgrade/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def put(self, request):
-        serializer = UpgradeSubscriptionSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response("Invalid request", serializer.errors)
-        
-        user = request.user
-        new_plan_type = serializer.validated_data['new_plan_type']
-        
-        try:
-            subscription = user.subscription
-        except Subscription.DoesNotExist:
-            return error_response("No subscription found")
-        
-        current_plan_id = subscription.plan.plan_id if subscription.plan else 'basic'
-        
-        # Validate upgrade path
-        valid_upgrades = {'basic': ['premium', 'pro'], 'premium': ['pro']}
-        if new_plan_type not in valid_upgrades.get(current_plan_id, []):
-            return error_response("Invalid upgrade path", status_code=400)
-        
-        new_plan = get_plan(new_plan_type)
-        if not new_plan or not new_plan.stripe_price_id:
-            return error_response("Plan not configured")
-        
-        try:
-            if subscription.stripe_subscription_id:
-                # Update Stripe subscription
-                stripe_sub = stripe.Subscription.retrieve(subscription.stripe_subscription_id)
-                stripe.Subscription.modify(
-                    subscription.stripe_subscription_id,
-                    items=[{
-                        'id': stripe_sub['items']['data'][0].id,
-                        'price': new_plan.stripe_price_id
-                    }],
-                    proration_behavior='create_prorations'
-                )
-            
-            # Update local subscription
-            subscription.plan = new_plan
-            subscription.stripe_price_id = new_plan.stripe_price_id
-            subscription.save()
-            
-            # Update user
-            user.subscription_status = new_plan_type
-            user.save()
-            
-            # Update usage tracking
-            usage = UsageTracking.objects.filter(user=user).order_by('-created_at').first()
-            if usage:
-                usage.videos_remaining = new_plan.videos_per_month
-                usage.save()
-            
-            return success_response(
-                "Subscription upgraded successfully",
-                {'subscription': SubscriptionSerializer(subscription).data}
-            )
-            
-        except stripe.error.StripeError as e:
-            return error_response(f"Upgrade error: {str(e)}")
-
-
-class DowngradeSubscriptionView(APIView):
-    """
-    Downgrade subscription (effective at period end).
-    PUT /api/payments/subscriptions/downgrade/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def put(self, request):
-        serializer = DowngradeSubscriptionSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response("Invalid request", serializer.errors)
-        
-        user = request.user
-        new_plan_type = serializer.validated_data['new_plan_type']
-        
-        try:
-            subscription = user.subscription
-        except Subscription.DoesNotExist:
-            return error_response("No subscription found")
-        
-        current_plan_id = subscription.plan.plan_id if subscription.plan else 'basic'
-        
-        # Validate downgrade path
-        valid_downgrades = {'pro': ['premium', 'basic'], 'premium': ['basic']}
-        if new_plan_type not in valid_downgrades.get(current_plan_id, []):
-            return error_response("Invalid downgrade path", status_code=400)
-        
-        try:
-            if new_plan_type == 'basic' and subscription.stripe_subscription_id:
-                # Cancel at period end for basic downgrade
-                stripe.Subscription.modify(
-                    subscription.stripe_subscription_id,
-                    cancel_at_period_end=True
-                )
-                subscription.cancel_at_period_end = True
-            elif subscription.stripe_subscription_id:
-                # Schedule plan change at period end
-                new_plan = get_plan(new_plan_type)
-                stripe_sub = stripe.Subscription.retrieve(subscription.stripe_subscription_id)
-                stripe.Subscription.modify(
-                    subscription.stripe_subscription_id,
-                    items=[{
-                        'id': stripe_sub['items']['data'][0].id,
-                        'price': new_plan.stripe_price_id
-                    }],
-                    proration_behavior='none'
-                )
-            
-            subscription.save()
-            
-            return success_response(
-                "Subscription will be downgraded at the end of current billing period",
-                {
-                    'subscription': SubscriptionSerializer(subscription).data,
-                    'change_effective_date': subscription.current_period_end
-                }
-            )
-            
-        except stripe.error.StripeError as e:
-            return error_response(f"Downgrade error: {str(e)}")
-
-
 class CancelSubscriptionView(APIView):
     """
     Cancel subscription (remains active until period end).
@@ -351,10 +305,6 @@ class CancelSubscriptionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = CancelSubscriptionSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response("Invalid request", serializer.errors)
-        
         user = request.user
         
         try:
@@ -385,7 +335,7 @@ class CancelSubscriptionView(APIView):
             )
             
         except stripe.error.StripeError as e:
-            return error_response(f"Cancellation error: {str(e)}")
+            return error_response(f"Error: {str(e)}")
 
 
 class ReactivateSubscriptionView(APIView):
@@ -423,254 +373,45 @@ class ReactivateSubscriptionView(APIView):
             )
             
         except stripe.error.StripeError as e:
-            return error_response(f"Reactivation error: {str(e)}")
+            return error_response(f"Error: {str(e)}")
 
 
-# ==================== PAYMENT ENDPOINTS ====================
-
-class SetupIntentView(APIView):
+class CreateBillingPortalView(APIView):
     """
-    Create Stripe SetupIntent for saving payment method.
-    POST /api/payments/setup-intent/
+    Create Stripe Customer Portal session for managing subscription.
+    POST /api/payments/billing-portal/
+    
+    Request Body:
+    {
+        "return_url": "https://yoursite.com/account"
+    }
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user = request.user
+        return_url = request.data.get('return_url')
         
-        try:
-            # Get or create Stripe customer
-            if not user.stripe_customer_id:
-                customer = stripe.Customer.create(
-                    email=user.email,
-                    name=user.name or user.email,
-                    metadata={'user_id': str(user.id)}
-                )
-                user.stripe_customer_id = customer.id
-                user.save()
-            
-            setup_intent = stripe.SetupIntent.create(
-                customer=user.stripe_customer_id,
-                payment_method_types=['card']
-            )
-            
-            return success_response(
-                "Setup intent created",
-                {
-                    'client_secret': setup_intent.client_secret,
-                    'stripe_customer_id': user.stripe_customer_id
-                }
-            )
-            
-        except stripe.error.StripeError as e:
-            return error_response(f"Setup error: {str(e)}")
-
-
-class PaymentMethodsView(APIView):
-    """
-    Get payment methods.
-    GET /api/payments/methods/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
+        if not return_url:
+            return error_response("return_url is required")
+        
         user = request.user
         
         if not user.stripe_customer_id:
-            return success_response("No payment methods", {'payment_methods': []})
+            return error_response("No billing account found")
         
         try:
-            payment_methods = stripe.PaymentMethod.list(
+            portal_session = stripe.billing_portal.Session.create(
                 customer=user.stripe_customer_id,
-                type='card'
+                return_url=return_url,
             )
-            
-            customer = stripe.Customer.retrieve(user.stripe_customer_id)
-            default_pm = customer.get('invoice_settings', {}).get('default_payment_method')
-            
-            methods = []
-            for pm in payment_methods.data:
-                methods.append({
-                    'id': pm.id,
-                    'type': pm.type,
-                    'card': {
-                        'brand': pm.card.brand,
-                        'last4': pm.card.last4,
-                        'exp_month': pm.card.exp_month,
-                        'exp_year': pm.card.exp_year
-                    },
-                    'is_default': pm.id == default_pm
-                })
-            
-            return success_response("Payment methods retrieved", {'payment_methods': methods})
-            
-        except stripe.error.StripeError as e:
-            return error_response(f"Error: {str(e)}")
-
-
-class AddPaymentMethodView(APIView):
-    """
-    Add new payment method.
-    POST /api/payments/methods/add/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        serializer = AddPaymentMethodSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response("Invalid request", serializer.errors)
-        
-        user = request.user
-        payment_method_id = serializer.validated_data['payment_method_id']
-        set_as_default = serializer.validated_data['set_as_default']
-        
-        try:
-            if not user.stripe_customer_id:
-                customer = stripe.Customer.create(
-                    email=user.email,
-                    name=user.name or user.email
-                )
-                user.stripe_customer_id = customer.id
-                user.save()
-            
-            stripe.PaymentMethod.attach(
-                payment_method_id,
-                customer=user.stripe_customer_id
-            )
-            
-            if set_as_default:
-                stripe.Customer.modify(
-                    user.stripe_customer_id,
-                    invoice_settings={'default_payment_method': payment_method_id}
-                )
             
             return success_response(
-                "Payment method added successfully",
-                {
-                    'payment_method': {
-                        'id': payment_method_id,
-                        'is_default': set_as_default
-                    }
-                }
+                "Billing portal session created",
+                {'portal_url': portal_session.url}
             )
             
         except stripe.error.StripeError as e:
             return error_response(f"Error: {str(e)}")
-
-
-class DeletePaymentMethodView(APIView):
-    """
-    Delete payment method.
-    DELETE /api/payments/methods/{payment_method_id}/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def delete(self, request, payment_method_id):
-        try:
-            stripe.PaymentMethod.detach(payment_method_id)
-            return success_response("Payment method removed successfully")
-        except stripe.error.StripeError as e:
-            return error_response(f"Error: {str(e)}")
-
-
-class VideoPurchaseView(APIView):
-    """
-    Purchase single video generation.
-    POST /api/payments/video-purchase/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        serializer = VideoPurchaseSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response("Invalid request", serializer.errors)
-        
-        user = request.user
-        payment_method_id = serializer.validated_data['payment_method_id']
-        video_quality = serializer.validated_data['video_quality']
-        
-        try:
-            # Create payment intent
-            payment_intent = stripe.PaymentIntent.create(
-                amount=int(VIDEO_PRICE * 100),  # Convert to cents
-                currency='eur',
-                customer=user.stripe_customer_id,
-                payment_method=payment_method_id,
-                confirm=True,
-                metadata={
-                    'user_id': str(user.id),
-                    'purchase_type': 'video_generation',
-                    'video_quality': video_quality
-                }
-            )
-            
-            # Create payment record
-            payment = Payment.objects.create(
-                user=user,
-                stripe_payment_intent_id=payment_intent.id,
-                payment_type='video_generation',
-                amount=VIDEO_PRICE,
-                currency='EUR',
-                status='succeeded' if payment_intent.status == 'succeeded' else 'pending',
-                description='Video generation purchase',
-                payment_date=timezone.now() if payment_intent.status == 'succeeded' else None
-            )
-            
-            # Create video purchase record
-            video_purchase = VideoPurchase.objects.create(
-                user=user,
-                payment=payment,
-                video_quality=video_quality,
-                amount_paid=VIDEO_PRICE,
-                generation_status='pending'
-            )
-            
-            return created_response(
-                "Video purchase successful",
-                {
-                    'payment': PaymentSerializer(payment).data,
-                    'purchase': {
-                        'purchase_id': str(video_purchase.id),
-                        'generation_status': video_purchase.generation_status
-                    }
-                }
-            )
-            
-        except stripe.error.StripeError as e:
-            return error_response(f"Payment error: {str(e)}")
-
-
-class PaymentHistoryView(APIView):
-    """
-    Get payment history.
-    GET /api/payments/history/
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-        payment_type = request.query_params.get('payment_type', 'all')
-        
-        queryset = Payment.objects.filter(user=user)
-        
-        if payment_type != 'all':
-            queryset = queryset.filter(payment_type=payment_type)
-        
-        paginator = StandardPagination()
-        page = paginator.paginate_queryset(queryset, request)
-        
-        return success_response(
-            "Payment history retrieved",
-            {
-                'payments': PaymentSerializer(page, many=True).data,
-                'pagination': {
-                    'current_page': paginator.page.number,
-                    'total_pages': paginator.page.paginator.num_pages,
-                    'total_items': paginator.page.paginator.count,
-                    'items_per_page': paginator.get_page_size(request)
-                }
-            }
-        )
 
 
 # ==================== USAGE ENDPOINTS ====================
@@ -719,36 +460,37 @@ class CurrentUsageView(APIView):
         )
 
 
-class UsageHistoryView(APIView):
+class PaymentHistoryView(APIView):
     """
-    Get historical usage data.
-    GET /api/payments/usage/history/
+    Get payment history.
+    GET /api/payments/history/
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
+        payment_type = request.query_params.get('payment_type', 'all')
         
-        queryset = UsageTracking.objects.filter(user=user)
+        queryset = Payment.objects.filter(user=user)
         
-        if start_date:
-            queryset = queryset.filter(billing_period_start__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(billing_period_end__lte=end_date)
+        if payment_type != 'all':
+            queryset = queryset.filter(payment_type=payment_type)
         
-        usage_history = []
-        for usage in queryset:
-            usage_history.append({
-                'period_start': usage.billing_period_start,
-                'period_end': usage.billing_period_end,
-                'itineraries_generated': usage.itineraries_generated,
-                'videos_generated': usage.videos_generated,
-                'chatbot_queries': usage.chatbot_queries
-            })
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(queryset, request)
         
-        return success_response("Usage history retrieved", {'usage_history': usage_history})
+        return success_response(
+            "Payment history retrieved",
+            {
+                'payments': PaymentSerializer(page, many=True).data,
+                'pagination': {
+                    'current_page': paginator.page.number,
+                    'total_pages': paginator.page.paginator.num_pages,
+                    'total_items': paginator.page.paginator.count,
+                    'items_per_page': paginator.get_page_size(request)
+                }
+            }
+        )
 
 
 # ==================== ADMIN ENDPOINTS ====================
@@ -763,13 +505,11 @@ class AdminTransactionsView(APIView):
     def get(self, request):
         admin_user = request.user
         
-        # Filter parameters
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
         
         queryset = Payment.objects.select_related('user').all()
         
-        # Apply date filters
         if start_date:
             queryset = queryset.filter(created_at__date__gte=start_date)
         if end_date:
@@ -777,11 +517,9 @@ class AdminTransactionsView(APIView):
         
         queryset = queryset.order_by('-created_at')
         
-        # Paginate
         paginator = StandardPagination()
         page = paginator.paginate_queryset(queryset, request)
         
-        # Build transaction list with serial numbers
         start_index = (paginator.page.number - 1) * paginator.get_page_size(request) + 1
         transactions = []
         for index, payment in enumerate(page):
@@ -862,37 +600,6 @@ class AdminSubscriptionsView(APIView):
         )
 
 
-class AdminWebhookEventsView(APIView):
-    """
-    Admin: List webhook events.
-    GET /api/payments/admin/webhooks/events/
-    """
-    permission_classes = [IsAuthenticated, IsAdminUser]
-
-    def get(self, request):
-        admin_user = request.user
-        event_type = request.query_params.get('event_type')
-        status = request.query_params.get('status')
-        
-        queryset = WebhookEvent.objects.all()
-        
-        if event_type:
-            queryset = queryset.filter(event_type=event_type)
-        if status:
-            queryset = queryset.filter(processing_status=status)
-        
-        paginator = StandardPagination()
-        page = paginator.paginate_queryset(queryset, request)
-        
-        return success_response(
-            "Webhook events retrieved",
-            {
-                'admin_info': get_admin_info(admin_user),
-                'events': WebhookEventSerializer(page, many=True).data
-            }
-        )
-
-
 # ==================== WEBHOOK ENDPOINT ====================
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -941,18 +648,103 @@ class StripeWebhookView(APIView):
         return success_response("Webhook processed")
 
     def _process_event(self, event):
-        """Process different webhook event types."""
+        """Process webhook events."""
         event_type = event.type
         data = event.data.object
         
-        if event_type == 'customer.subscription.updated':
-            self._handle_subscription_updated(data)
-        elif event_type == 'customer.subscription.deleted':
-            self._handle_subscription_deleted(data)
-        elif event_type == 'invoice.payment_succeeded':
-            self._handle_payment_succeeded(data)
-        elif event_type == 'invoice.payment_failed':
-            self._handle_payment_failed(data)
+        handlers = {
+            'checkout.session.completed': self._handle_checkout_completed,
+            'customer.subscription.created': self._handle_subscription_created,
+            'customer.subscription.updated': self._handle_subscription_updated,
+            'customer.subscription.deleted': self._handle_subscription_deleted,
+            'invoice.payment_succeeded': self._handle_invoice_paid,
+            'invoice.payment_failed': self._handle_invoice_failed,
+        }
+        
+        handler = handlers.get(event_type)
+        if handler:
+            handler(data)
+
+    def _handle_checkout_completed(self, session):
+        """Handle checkout.session.completed event."""
+        from authentication.models import User
+        
+        user_id = session.metadata.get('user_id')
+        if not user_id:
+            return
+        
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return
+        
+        # Check if subscription or one-time payment
+        if session.mode == 'subscription':
+            plan_type = session.metadata.get('plan_type')
+            plan = get_plan(plan_type)
+            
+            if plan and session.subscription:
+                # Get Stripe subscription details
+                stripe_sub = stripe.Subscription.retrieve(session.subscription)
+                
+                # Create or update subscription
+                subscription, created = Subscription.objects.update_or_create(
+                    user=user,
+                    defaults={
+                        'plan': plan,
+                        'stripe_subscription_id': session.subscription,
+                        'stripe_price_id': plan.stripe_price_id,
+                        'status': 'active',
+                        'current_period_start': timezone.datetime.fromtimestamp(
+                            stripe_sub.current_period_start, tz=timezone.utc
+                        ),
+                        'current_period_end': timezone.datetime.fromtimestamp(
+                            stripe_sub.current_period_end, tz=timezone.utc
+                        )
+                    }
+                )
+                
+                # Update user
+                user.subscription_status = plan_type
+                user.save()
+                
+                # Initialize usage tracking
+                UsageTracking.objects.create(
+                    user=user,
+                    subscription=subscription,
+                    billing_period_start=subscription.current_period_start,
+                    billing_period_end=subscription.current_period_end,
+                    videos_remaining=plan.videos_per_month
+                )
+                
+        elif session.mode == 'payment':
+            # One-time payment (video purchase)
+            video_quality = session.metadata.get('video_quality', 'standard')
+            
+            # Create payment record
+            payment = Payment.objects.create(
+                user=user,
+                stripe_payment_intent_id=session.payment_intent,
+                payment_type='video_generation',
+                amount=Decimal(session.amount_total) / 100,
+                currency=session.currency.upper(),
+                status='succeeded',
+                description='Video generation purchase',
+                payment_date=timezone.now()
+            )
+            
+            # Create video purchase record
+            VideoPurchase.objects.create(
+                user=user,
+                payment=payment,
+                video_quality=video_quality,
+                amount_paid=Decimal(session.amount_total) / 100,
+                generation_status='pending'
+            )
+
+    def _handle_subscription_created(self, data):
+        """Handle subscription created."""
+        pass  # Handled in checkout.session.completed
 
     def _handle_subscription_updated(self, data):
         """Handle subscription update."""
@@ -985,24 +777,26 @@ class StripeWebhookView(APIView):
         except Subscription.DoesNotExist:
             pass
 
-    def _handle_payment_succeeded(self, data):
-        """Handle successful payment."""
+    def _handle_invoice_paid(self, invoice):
+        """Handle successful invoice payment."""
+        if not invoice.subscription:
+            return
+            
         try:
-            subscription = Subscription.objects.get(
-                stripe_subscription_id=data.subscription
-            )
+            subscription = Subscription.objects.get(stripe_subscription_id=invoice.subscription)
             
             # Record payment
             Payment.objects.create(
                 user=subscription.user,
                 subscription=subscription,
-                stripe_invoice_id=data.id,
+                stripe_invoice_id=invoice.id,
+                stripe_payment_intent_id=invoice.payment_intent,
                 payment_type='subscription',
-                amount=Decimal(data.amount_paid) / 100,
-                currency=data.currency.upper(),
+                amount=Decimal(invoice.amount_paid) / 100,
+                currency=invoice.currency.upper(),
                 status='succeeded',
                 description=f"{subscription.plan.name if subscription.plan else 'Subscription'} - Monthly",
-                receipt_url=data.hosted_invoice_url,
+                receipt_url=invoice.hosted_invoice_url,
                 payment_date=timezone.now()
             )
             
@@ -1018,22 +812,23 @@ class StripeWebhookView(APIView):
         except Subscription.DoesNotExist:
             pass
 
-    def _handle_payment_failed(self, data):
-        """Handle failed payment."""
+    def _handle_invoice_failed(self, invoice):
+        """Handle failed invoice payment."""
+        if not invoice.subscription:
+            return
+            
         try:
-            subscription = Subscription.objects.get(
-                stripe_subscription_id=data.subscription
-            )
+            subscription = Subscription.objects.get(stripe_subscription_id=invoice.subscription)
             subscription.status = 'past_due'
             subscription.save()
             
             Payment.objects.create(
                 user=subscription.user,
                 subscription=subscription,
-                stripe_invoice_id=data.id,
+                stripe_invoice_id=invoice.id,
                 payment_type='subscription',
-                amount=Decimal(data.amount_due) / 100,
-                currency=data.currency.upper(),
+                amount=Decimal(invoice.amount_due) / 100,
+                currency=invoice.currency.upper(),
                 status='failed',
                 description='Payment failed'
             )
