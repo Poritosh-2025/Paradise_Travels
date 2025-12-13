@@ -2,6 +2,7 @@
 Views for payment and subscription endpoints.
 Stripe Checkout Session integration.
 """
+from datetime import datetime, timezone as dt_timezone
 import stripe
 from decimal import Decimal
 from django.conf import settings
@@ -668,8 +669,10 @@ class StripeWebhookView(APIView):
     def _handle_checkout_completed(self, session):
         """Handle checkout.session.completed event."""
         from authentication.models import User
+        from datetime import datetime, timezone as dt_timezone
         
-        user_id = session.metadata.get('user_id')
+        metadata = session.get('metadata', {})
+        user_id = metadata.get('user_id')
         if not user_id:
             return
         
@@ -678,37 +681,43 @@ class StripeWebhookView(APIView):
         except User.DoesNotExist:
             return
         
-        # Check if subscription or one-time payment
-        if session.mode == 'subscription':
-            plan_type = session.metadata.get('plan_type')
+        mode = session.get('mode')
+        
+        if mode == 'subscription':
+            plan_type = metadata.get('plan_type')
             plan = get_plan(plan_type)
+            subscription_id = session.get('subscription')
             
-            if plan and session.subscription:
-                # Get Stripe subscription details
-                stripe_sub = stripe.Subscription.retrieve(session.subscription)
+            if plan and subscription_id:
+                stripe_sub = stripe.Subscription.retrieve(subscription_id)
                 
-                # Create or update subscription
+                items_data = stripe_sub.get('items', {}).get('data', [])
+                if items_data:
+                    current_period_start = items_data[0].get('current_period_start')
+                    current_period_end = items_data[0].get('current_period_end')
+                else:
+                    current_period_start = stripe_sub.get('start_date') or stripe_sub.get('created')
+                    current_period_end = current_period_start + (30 * 24 * 60 * 60)
+                
                 subscription, created = Subscription.objects.update_or_create(
                     user=user,
                     defaults={
                         'plan': plan,
-                        'stripe_subscription_id': session.subscription,
+                        'stripe_subscription_id': subscription_id,
                         'stripe_price_id': plan.stripe_price_id,
                         'status': 'active',
-                        'current_period_start': timezone.datetime.fromtimestamp(
-                            stripe_sub.current_period_start, tz=timezone.utc
+                        'current_period_start': datetime.fromtimestamp(
+                            current_period_start, tz=dt_timezone.utc
                         ),
-                        'current_period_end': timezone.datetime.fromtimestamp(
-                            stripe_sub.current_period_end, tz=timezone.utc
+                        'current_period_end': datetime.fromtimestamp(
+                            current_period_end, tz=dt_timezone.utc
                         )
                     }
                 )
                 
-                # Update user
                 user.subscription_status = plan_type
                 user.save()
                 
-                # Initialize usage tracking
                 UsageTracking.objects.create(
                     user=user,
                     subscription=subscription,
@@ -717,47 +726,78 @@ class StripeWebhookView(APIView):
                     videos_remaining=plan.videos_per_month
                 )
                 
-        elif session.mode == 'payment':
-            # One-time payment (video purchase)
-            video_quality = session.metadata.get('video_quality', 'standard')
+                # Create payment record
+                invoice_id = session.get('invoice')
+                if invoice_id:
+                    try:
+                        stripe_invoice = stripe.Invoice.retrieve(invoice_id)
+                        Payment.objects.create(
+                            user=user,
+                            subscription=subscription,
+                            stripe_invoice_id=invoice_id,
+                            stripe_payment_intent_id=stripe_invoice.get('payment_intent'),
+                            payment_type='subscription',
+                            amount=Decimal(stripe_invoice.get('amount_paid', 0)) / 100,
+                            currency=stripe_invoice.get('currency', 'eur').upper(),
+                            status='succeeded',
+                            description=f"{plan.name} - Subscription",
+                            receipt_url=stripe_invoice.get('hosted_invoice_url'),
+                            payment_date=timezone.now()
+                        )
+                    except Exception:
+                        pass
+                
+        elif mode == 'payment':
+            video_quality = metadata.get('video_quality', 'standard')
+            amount_total = session.get('amount_total', 0)
+            currency = session.get('currency', 'eur').upper()
+            payment_intent = session.get('payment_intent')
             
-            # Create payment record
             payment = Payment.objects.create(
                 user=user,
-                stripe_payment_intent_id=session.payment_intent,
+                stripe_payment_intent_id=payment_intent,
                 payment_type='video_generation',
-                amount=Decimal(session.amount_total) / 100,
-                currency=session.currency.upper(),
+                amount=Decimal(amount_total) / 100,
+                currency=currency,
                 status='succeeded',
                 description='Video generation purchase',
                 payment_date=timezone.now()
             )
             
-            # Create video purchase record
             VideoPurchase.objects.create(
                 user=user,
                 payment=payment,
                 video_quality=video_quality,
-                amount_paid=Decimal(session.amount_total) / 100,
+                amount_paid=Decimal(amount_total) / 100,
                 generation_status='pending'
             )
-
     def _handle_subscription_created(self, data):
         """Handle subscription created."""
         pass  # Handled in checkout.session.completed
 
     def _handle_subscription_updated(self, data):
         """Handle subscription update."""
+        from datetime import datetime, timezone as dt_timezone
+        
         try:
-            subscription = Subscription.objects.get(stripe_subscription_id=data.id)
-            subscription.status = data.status
-            subscription.current_period_start = timezone.datetime.fromtimestamp(
-                data.current_period_start, tz=timezone.utc
+            subscription = Subscription.objects.get(stripe_subscription_id=data.get('id'))
+            
+            items_data = data.get('items', {}).get('data', [])
+            if items_data:
+                current_period_start = items_data[0].get('current_period_start')
+                current_period_end = items_data[0].get('current_period_end')
+            else:
+                current_period_start = data.get('start_date')
+                current_period_end = current_period_start + (30 * 24 * 60 * 60)
+            
+            subscription.status = data.get('status')
+            subscription.current_period_start = datetime.fromtimestamp(
+                current_period_start, tz=dt_timezone.utc
             )
-            subscription.current_period_end = timezone.datetime.fromtimestamp(
-                data.current_period_end, tz=timezone.utc
+            subscription.current_period_end = datetime.fromtimestamp(
+                current_period_end, tz=dt_timezone.utc
             )
-            subscription.cancel_at_period_end = data.cancel_at_period_end
+            subscription.cancel_at_period_end = data.get('cancel_at_period_end', False)
             subscription.save()
         except Subscription.DoesNotExist:
             pass
@@ -765,7 +805,7 @@ class StripeWebhookView(APIView):
     def _handle_subscription_deleted(self, data):
         """Handle subscription cancellation."""
         try:
-            subscription = Subscription.objects.get(stripe_subscription_id=data.id)
+            subscription = Subscription.objects.get(stripe_subscription_id=data.get('id'))
             subscription.status = 'cancelled'
             subscription.plan = get_basic_plan()
             subscription.stripe_subscription_id = None
@@ -779,24 +819,25 @@ class StripeWebhookView(APIView):
 
     def _handle_invoice_paid(self, invoice):
         """Handle successful invoice payment."""
-        if not invoice.subscription:
+        subscription_id = invoice.get('subscription')
+        if not subscription_id:
             return
-            
+        
         try:
-            subscription = Subscription.objects.get(stripe_subscription_id=invoice.subscription)
+            subscription = Subscription.objects.get(stripe_subscription_id=subscription_id)
             
             # Record payment
             Payment.objects.create(
                 user=subscription.user,
                 subscription=subscription,
-                stripe_invoice_id=invoice.id,
-                stripe_payment_intent_id=invoice.payment_intent,
+                stripe_invoice_id=invoice.get('id'),
+                stripe_payment_intent_id=invoice.get('payment_intent'),
                 payment_type='subscription',
-                amount=Decimal(invoice.amount_paid) / 100,
-                currency=invoice.currency.upper(),
+                amount=Decimal(invoice.get('amount_paid', 0)) / 100,
+                currency=invoice.get('currency', 'eur').upper(),
                 status='succeeded',
                 description=f"{subscription.plan.name if subscription.plan else 'Subscription'} - Monthly",
-                receipt_url=invoice.hosted_invoice_url,
+                receipt_url=invoice.get('hosted_invoice_url'),
                 payment_date=timezone.now()
             )
             
@@ -810,25 +851,27 @@ class StripeWebhookView(APIView):
                     videos_remaining=subscription.plan.videos_per_month
                 )
         except Subscription.DoesNotExist:
+            # Subscription not created yet - will be handled by checkout.session.completed
             pass
 
     def _handle_invoice_failed(self, invoice):
         """Handle failed invoice payment."""
-        if not invoice.subscription:
+        subscription_id = invoice.get('subscription')
+        if not subscription_id:
             return
-            
+        
         try:
-            subscription = Subscription.objects.get(stripe_subscription_id=invoice.subscription)
+            subscription = Subscription.objects.get(stripe_subscription_id=subscription_id)
             subscription.status = 'past_due'
             subscription.save()
             
             Payment.objects.create(
                 user=subscription.user,
                 subscription=subscription,
-                stripe_invoice_id=invoice.id,
+                stripe_invoice_id=invoice.get('id'),
                 payment_type='subscription',
-                amount=Decimal(invoice.amount_due) / 100,
-                currency=invoice.currency.upper(),
+                amount=Decimal(invoice.get('amount_due', 0)) / 100,
+                currency=invoice.get('currency', 'eur').upper(),
                 status='failed',
                 description='Payment failed'
             )
