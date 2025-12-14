@@ -10,6 +10,7 @@ Integration Points:
 3. Usage tracking (from payments app)
 4. FastAPI proxy (to AI service on port 8001)
 """
+from rest_framework.parsers import JSONParser
 import logging
 from rest_framework import status
 from rest_framework.views import APIView
@@ -68,6 +69,7 @@ class CreateItineraryView(APIView):
     }
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser]
     
     def post(self, request):
         # Validate request data
