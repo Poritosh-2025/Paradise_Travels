@@ -36,9 +36,15 @@ CORS_ALLOW_ALL_ORIGINS = True
 # CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
-    "http://localhost:3000"
+    "http://localhost:3000",
+    'https://5f262f8d1b24.ngrok-free.app',
+    "http://localhost:8001",    # FastAPI service
 ]
 
+
+#   FastAPI Service Configuration
+FASTAPI_BASE_URL = os.getenv('FASTAPI_BASE_URL', 'http://localhost:8001')
+FASTAPI_TIMEOUT = 120  # seconds
 
 # Application definition
 INSTALLED_APPS = [
@@ -63,6 +69,7 @@ INSTALLED_APPS = [
     'administrators',
     'payments',
     'api_management',
+    'ai_services',  # New AI Services app
 ]
 
 MIDDLEWARE = [
@@ -196,7 +203,8 @@ OTP_EXPIRY_MINUTES = 10
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:9001',
     'http://10.10.7.93:9001',
-    'https://e7b95cc97b8d.ngrok-free.app'
+    'https://5f262f8d1b24.ngrok-free.app',
+    "http://localhost:8001",
 ]
 
 

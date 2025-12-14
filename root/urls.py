@@ -16,6 +16,8 @@ urlpatterns = [
     path('api/administrators/', include('administrators.urls')),
     path('api/payments/', include('payments.urls')),
     path('api/api-management/', include('api_management.urls')),
+    path('api/ai/', include('ai_services.urls')),  # AI Services endpoints
+
 ]
 
 # Serve media files in development
