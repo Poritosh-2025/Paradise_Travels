@@ -37,7 +37,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     "http://localhost:3000",
-    'https://5f262f8d1b24.ngrok-free.app',
+    'https://feaadf33d0b6.ngrok-free.app',
     "http://localhost:8001",    # FastAPI service
 ]
 
@@ -203,7 +203,7 @@ OTP_EXPIRY_MINUTES = 10
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:9001',
     'http://10.10.7.93:9001',
-    'https://5f262f8d1b24.ngrok-free.app',
+    'https://feaadf33d0b6.ngrok-free.app',
     "http://localhost:8001",
 ]
 
