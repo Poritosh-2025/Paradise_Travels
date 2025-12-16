@@ -12,10 +12,14 @@ load_dotenv()
 # Build paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Security
-SECRET_KEY = config('SECRET_KEY', default='your-secret-key-change-in-production')
-DEBUG = config('DEBUG', default=True, cast=bool)
+#   Security for local development; override in production with env vars
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-paradise-fallback-key')
+# DEBUG = config('DEBUG', default=True, cast=bool)
 
+#   Django Settings
+DEBUG=False
+
+#ALLOWED_HOSTS=localhost,127.0.0.1,your-domain.com
 
 ALLOWED_HOSTS =['*']
 
@@ -103,24 +107,57 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'root.wsgi.application'
 
-# Database - MySQL
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.mysql',
-#         'NAME': config('DB_NAME', default='admin_api_db'),
-#         'USER': config('DB_USER', default='root'),
-#         'PASSWORD': config('DB_PASSWORD', default=''),
-#         'HOST': config('DB_HOST', default='localhost'),
-#         'PORT': config('DB_PORT', default='3306'),
-#     }
-# }
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DATABASE_NAME'),
+        'USER': os.getenv('DATABASE_USER'),
+        'PASSWORD': os.getenv('DATABASE_PASSWORD'),
+        'HOST': os.getenv('DATABASE_HOST', 'localhost'),
+        'PORT': os.getenv('DATABASE_PORT', '5432'),
     }
 }
+
+# Database configuration
+# Prefer explicit DATABASE_* env vars (Postgres). Fall back to sqlite3 when not provided.
+# DATABASE_ENGINE = config('DATABASE_ENGINE', default='').strip()
+# DATABASE_NAME = config('DATABASE_NAME', default='') or config('DB_NAME', default='')
+# DATABASE_USER = config('DATABASE_USER', default='') or config('DB_USER', default='')
+# DATABASE_PASSWORD = config('DATABASE_PASSWORD', default='') or config('DB_PASSWORD', default='')
+# DATABASE_HOST = config('DATABASE_HOST', default='') or config('DB_HOST', default='')
+# DATABASE_PORT = config('DATABASE_PORT', default='') or config('DB_PORT', default='')
+
+# if DATABASE_ENGINE:
+#     DATABASES = {
+#         'default': {
+#             'ENGINE': DATABASE_ENGINE,
+#             'NAME': DATABASE_NAME or BASE_DIR / 'db.sqlite3',
+#             'USER': DATABASE_USER,
+#             'PASSWORD': DATABASE_PASSWORD,
+#             'HOST': DATABASE_HOST or 'localhost',
+#             'PORT': int(DATABASE_PORT) if DATABASE_PORT else '',
+#         }
+#     }
+# elif DATABASE_NAME:
+#     # assume PostgreSQL when DATABASE_NAME present and no explicit engine
+#     DATABASES = {
+#         'default': {
+#             'ENGINE': 'django.db.backends.postgresql',
+#             'NAME': DATABASE_NAME,
+#             'USER': DATABASE_USER or 'postgres',
+#             'PASSWORD': DATABASE_PASSWORD,
+#             'HOST': DATABASE_HOST or 'localhost',
+#             'PORT': int(DATABASE_PORT) if DATABASE_PORT else 5432,
+#         }
+#     }
+# else:
+#     DATABASES = {
+#         'default': {
+#             'ENGINE': 'django.db.backends.sqlite3',
+#             'NAME': BASE_DIR / 'db.sqlite3',
+#         }
+#     }
 
 # Custom User Model
 AUTH_USER_MODEL = 'authentication.User'
@@ -206,6 +243,25 @@ CSRF_TRUSTED_ORIGINS = [
     'https://feaadf33d0b6.ngrok-free.app',
     "http://localhost:8001",
 ]
+
+# Redis Configuration
+REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+
+# Celery Configuration
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Cache Configuration (Optional - if you want to use Redis for caching)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+    }
+}
 
 
  

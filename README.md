@@ -138,6 +138,48 @@ python manage.py runserver 0.0.0.0:9001
 ```bash
 celery -A root worker -l info
 celery -A root beat -l info
+
+## Docker (optional) — Build and run with Docker Compose
+
+This project includes a `Dockerfile`, `docker-entrypoint.sh`, and `docker-compose.yml` for local development and simple deployments.
+
+Files created:
+- `Dockerfile` — builds a slim Python 3.11 image, installs dependencies, copies the code and uses Gunicorn.
+- `docker-entrypoint.sh` — entrypoint that runs `collectstatic`, `migrate`, and then starts the CMD.
+- `docker-compose.yml` — defines services: `db` (Postgres), `redis`, `web`, `celery`, `celery-beat`.
+
+Recommended quickstart with Docker:
+
+1. Copy `.env.example` to `.env` and fill in values (Postgres credentials, Stripe keys, email credentials, etc.).
+
+```bash
+cp .env.example .env
+```
+
+2. Build and start services with Docker Compose:
+
+```bash
+docker-compose build --pull
+docker-compose up -d
+```
+
+3. View logs for the web service:
+
+```bash
+docker-compose logs -f web
+```
+
+4. To run management commands (e.g., create superuser, run migrations manually):
+
+```bash
+docker-compose exec web python manage.py createsuperuser
+docker-compose exec web python manage.py migrate
+```
+
+Notes:
+- The `web` service exposes port `8000` on the host by default — change the mapping in `docker-compose.yml` if you need a different host port.
+- Ensure the `.env` values match the `POSTGRES_*` environment variables used by the `db` service (or update `docker-compose.yml` accordingly).
+
 ```
 
 ## Project layout and important files
