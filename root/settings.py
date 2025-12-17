@@ -43,7 +43,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     'https://feaadf33d0b6.ngrok-free.app',
     "http://localhost:8001",    # FastAPI service
-    "https://paradiseapi.dsrt321.online/",
+    "https://paradiseapi.dsrt321.online",
 ]
 
 
@@ -243,7 +243,7 @@ CSRF_TRUSTED_ORIGINS = [
     'http://10.10.7.93:9001',
     'https://feaadf33d0b6.ngrok-free.app',
     "http://localhost:8001",
-    "https://paradiseapi.dsrt321.online/",
+    "https://paradiseapi.dsrt321.online",
 ]
 
 # Redis Configuration

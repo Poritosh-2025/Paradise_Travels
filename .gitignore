@@ -136,3 +136,8 @@ GitHub.sublime-settings
 !.vscode/launch.json 
 !.vscode/extensions.json 
 .history.env
+staticfiles
+celerybeat-schedule
+celerybeat.pid
+celeryd.pid
+
