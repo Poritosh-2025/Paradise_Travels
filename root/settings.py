@@ -14,10 +14,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 #   Security for local development; override in production with env vars
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-paradise-fallback-key')
-# DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = config('DEBUG', default=True, cast=bool)
 
 #   Django Settings
-DEBUG=False
+#DEBUG=True
 
 #ALLOWED_HOSTS=localhost,127.0.0.1,your-domain.com
 
