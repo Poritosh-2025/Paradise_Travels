@@ -9,11 +9,15 @@ services:
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-paradise_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "12011:5432"
     networks:
       - paradise-net
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "12021:6379"
     networks:
       - paradise-net
 
