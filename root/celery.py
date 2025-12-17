@@ -6,7 +6,10 @@ from celery import Celery
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'root.settings')
 
-app = Celery('root',broker='redis://localhost:6379/0')
+# Get Redis URL from environment (Docker uses 'redis' hostname)
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
+
+app = Celery('root', broker=CELERY_BROKER_URL)
 app.config_from_object('django.conf:settings', namespace='CELERY')
 app.autodiscover_tasks()
 
