@@ -23,7 +23,8 @@ services:
 
   web:
     build: .
-    command: gunicorn root.wsgi:application --bind 0.0.0.0:8000 --workers 3
+    # FIXED: Added --timeout 600 (10 minutes)
+    command: gunicorn root.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 1000
     volumes:
       - .:/app
     env_file:

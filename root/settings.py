@@ -49,7 +49,7 @@ CORS_ALLOWED_ORIGINS = [
 
 #   FastAPI Service Configuration
 FASTAPI_BASE_URL = os.getenv('FASTAPI_BASE_URL', 'http://localhost:8001')
-FASTAPI_TIMEOUT = 120  # seconds
+FASTAPI_TIMEOUT = int(os.getenv('FASTAPI_TIMEOUT', 1000))  # seconds
 
 # Application definition
 INSTALLED_APPS = [

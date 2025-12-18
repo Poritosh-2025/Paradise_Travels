@@ -178,7 +178,7 @@ class ItineraryListView(APIView):
     def get(self, request):
         # Get query parameters
         status_filter = request.query_params.get('status')
-        limit = int(request.query_params.get('limit', 10))
+        limit = int(request.query_params.get('limit', 100))
         offset = int(request.query_params.get('offset', 0))
         
         # Build queryset

@@ -24,7 +24,7 @@ class FastAPIClient:
     
     def __init__(self):
         self.base_url = getattr(settings, 'FASTAPI_BASE_URL', 'http://localhost:8001')
-        self.timeout = getattr(settings, 'FASTAPI_TIMEOUT', 120)
+        self.timeout = getattr(settings, 'FASTAPI_TIMEOUT', 1000)
     
     def _make_request(
         self,

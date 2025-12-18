@@ -16,5 +16,9 @@ python manage.py collectstatic --noinput || true
 echo "Applying database migrations..."
 python manage.py migrate --noinput
 
+# ADD THIS SECTION - Seed subscription plans
+echo "Seeding subscription plans..."
+python manage.py seed_plans || echo "seed_plans skipped or already done"
+
 echo "Starting server..."
 exec "$@"
