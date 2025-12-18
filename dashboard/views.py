@@ -5,7 +5,6 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.db.models import Sum
-
 from core.responses import success_response, forbidden_response
 from core.permissions import IsAdminUser
 from core.utils import get_admin_info
@@ -37,9 +36,9 @@ class DashboardStatisticsView(APIView):
             subscription_status__in=['premium', 'pro']
         ).count()
         
-        # Total earnings from payments
+        # Total earnings from payments - Fixed: use 'status' not 'payment_status'
         total_earned = Payment.objects.filter(
-            payment_status='completed'
+            status='succeeded'
         ).aggregate(total=Sum('amount'))['total'] or 0
         
         return success_response(
@@ -52,7 +51,7 @@ class DashboardStatisticsView(APIView):
                     'total_subscribers': total_subscribers,
                     'total_earned': {
                         'amount': float(total_earned),
-                        'currency': 'USD'
+                        'currency': 'EUR'  # Changed to EUR since Stripe uses EUR
                     }
                 },
                 'generated_at': timezone.now().isoformat()
