@@ -7,11 +7,13 @@ from django.urls import path
 from .views import (
     # Itinerary
     CreateItineraryView,
+    ItineraryStatusView,
     ItineraryListView,
     ItineraryDetailView,
     ReallocateBudgetView,
     # Chat
     ChatView,
+     ChatStatusView,
     ChatHistoryView,
     # Photos
     UploadPhotoView,
@@ -36,6 +38,8 @@ urlpatterns = [
     # POST - Create new itinerary
     # Checks plan limits, proxies to FastAPI
     path('itineraries/create/', CreateItineraryView.as_view(), name='create-itinerary'),
+
+    path('itineraries/<uuid:itinerary_id>/status/', ItineraryStatusView.as_view(), name='itinerary-status'),
     
     # GET - List user's itineraries
     path('itineraries/', ItineraryListView.as_view(), name='itinerary-list'),
@@ -52,7 +56,7 @@ urlpatterns = [
     
     # POST - Send chat message to modify itinerary
     path('chat/', ChatView.as_view(), name='chat'),
-    
+    path('chat/<uuid:message_id>/status/', ChatStatusView.as_view(), name='chat-status'),
     # GET - Get chat history for itinerary
     path('chat/<uuid:itinerary_id>/history/', ChatHistoryView.as_view(), name='chat-history'),
     

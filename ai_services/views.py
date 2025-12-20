@@ -9,6 +9,7 @@ Integration Points:
 2. Subscription/Plan checks (from payments app)
 3. Usage tracking (from payments app)
 4. FastAPI proxy (to AI service on port 8001)
+5. Celery tasks for async processing
 """
 from rest_framework.parsers import JSONParser
 import logging
@@ -34,6 +35,7 @@ from .serializers import (
     VideoGenerationListSerializer,
     UsageSerializer,
 )
+from .tasks import create_itinerary_task, generate_video_task, chat_task
 from .fastapi_client import fastapi_client
 from .usage_service import usage_service
 
@@ -46,14 +48,17 @@ logger = logging.getLogger(__name__)
 
 class CreateItineraryView(APIView):
     """
-    Create a new travel itinerary.
+    Create a new travel itinerary (ASYNC with Celery).
     
     POST /api/ai/itineraries/create/
+    
+    Returns immediately with itinerary_id and status='pending'.
+    Use GET /api/ai/itineraries/<id>/status/ to check progress.
     
     Integration:
     - Requires JWT authentication
     - Checks plan limits (Basic: 1/month, Premium/Pro: unlimited)
-    - Proxies to FastAPI /api/create-itinerary
+    - Queues Celery task to proxy to FastAPI /api/create-itinerary
     - Tracks usage in payments app
     
     Request Body:
@@ -91,75 +96,93 @@ class CreateItineraryView(APIView):
                 'upgrade_url': '/pricing/'
             }, status=status.HTTP_403_FORBIDDEN)
         
-        # Proxy to FastAPI
-        logger.info(f"🌍 Creating itinerary for {request.user.email}: {serializer.validated_data['destination']}")
-        
-        result = fastapi_client.create_itinerary(
-            destination=serializer.validated_data['destination'],
-            budget=float(serializer.validated_data['budget']),
-            duration=serializer.validated_data['duration'],
-            travelers=serializer.validated_data['travelers'],
-            activity_preference=serializer.validated_data['activity_preference'],
-            include_flights=serializer.validated_data.get('include_flights', False),
-            include_hotels=serializer.validated_data.get('include_hotels', False),
-            user_location=serializer.validated_data.get('user_location', 'New York')
-        )
-        
-        if not result['success']:
-            # Check for insufficient budget error from FastAPI
-            if result.get('data') and result['data'].get('error') == 'insufficient_budget':
-                return Response({
-                    'status': 'error',
-                    'message': result['data'].get('message', 'Insufficient budget'),
-                    'error_code': 'insufficient_budget',
-                    'minimum_budget': result['data'].get('minimum_budget'),
-                    'current_budget': result['data'].get('current_budget')
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            return Response({
-                'status': 'error',
-                'message': result.get('error', 'Failed to create itinerary'),
-                'error_code': 'fastapi_error'
-            }, status=status.HTTP_502_BAD_GATEWAY)
-        
-        # Extract data from FastAPI response
-        fastapi_data = result['data']
-        fastapi_itinerary_id = fastapi_data.get('itinerary_id')
-        itinerary_data = fastapi_data.get('itinerary', {})
-        
-        # Get destination info
-        destination_info = itinerary_data.get('destination', {})
-        
-        # Create local itinerary record
+        # Create itinerary record with 'pending' status
         itinerary = Itinerary.objects.create(
             user=request.user,
-            fastapi_itinerary_id=fastapi_itinerary_id,
-            destination=destination_info.get('name', serializer.validated_data['destination']),
-            destination_country=destination_info.get('country', ''),
+            destination=serializer.validated_data['destination'],
             budget=serializer.validated_data['budget'],
             duration=serializer.validated_data['duration'],
             travelers=serializer.validated_data['travelers'],
             activity_preference=serializer.validated_data['activity_preference'],
             include_flights=serializer.validated_data.get('include_flights', False),
             include_hotels=serializer.validated_data.get('include_hotels', False),
-            status='completed',
-            itinerary_data=itinerary_data
+            status='pending'
         )
         
-        # Track usage
-        usage_service.record_itinerary_usage(request.user, itinerary)
+        # Prepare request data for Celery task
+        request_data = {
+            'destination': serializer.validated_data['destination'],
+            'budget': float(serializer.validated_data['budget']),
+            'duration': serializer.validated_data['duration'],
+            'travelers': serializer.validated_data['travelers'],
+            'activity_preference': serializer.validated_data['activity_preference'],
+            'include_flights': serializer.validated_data.get('include_flights', False),
+            'include_hotels': serializer.validated_data.get('include_hotels', False),
+            'user_location': serializer.validated_data.get('user_location', 'New York')
+        }
         
-        logger.info(f"✅ Itinerary created: {itinerary.id} for {request.user.email}")
+        # Start async Celery task
+        task = create_itinerary_task.delay(
+            user_id=str(request.user.id),
+            itinerary_db_id=str(itinerary.id),
+            request_data=request_data
+        )
+        
+        # Store task ID
+        itinerary.celery_task_id = task.id
+        itinerary.save()
+        
+        logger.info(f"🚀 Itinerary task queued: {task.id} for {request.user.email}")
         
         return Response({
             'status': 'success',
-            'message': 'Itinerary created successfully',
+            'message': 'Itinerary creation started. Check status for progress.',
             'data': {
                 'itinerary_id': str(itinerary.id),
-                'fastapi_itinerary_id': fastapi_itinerary_id,
-                'itinerary': itinerary_data
+                'task_id': task.id,
+                'status': 'pending',
+                'status_url': f'/api/ai/itineraries/{itinerary.id}/status/'
             }
-        }, status=status.HTTP_201_CREATED)
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class ItineraryStatusView(APIView):
+    """
+    Get itinerary creation status.
+    
+    GET /api/ai/itineraries/<id>/status/
+    
+    Returns current status and itinerary data when completed.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, itinerary_id):
+        itinerary = get_object_or_404(
+            Itinerary,
+            id=itinerary_id,
+            user=request.user
+        )
+        
+        response_data = {
+            'status': 'success',
+            'data': {
+                'itinerary_id': str(itinerary.id),
+                'task_id': itinerary.celery_task_id,
+                'task_status': itinerary.status,
+                'destination': itinerary.destination,
+                'created_at': itinerary.created_at,
+            }
+        }
+        
+        if itinerary.status == 'completed':
+            response_data['data']['itinerary'] = itinerary.itinerary_data
+            response_data['data']['fastapi_itinerary_id'] = itinerary.fastapi_itinerary_id
+            response_data['data']['completed_at'] = itinerary.completed_at
+        
+        elif itinerary.status == 'failed':
+            response_data['data']['error'] = itinerary.error_message
+        
+        return Response(response_data)
 
 
 class ItineraryListView(APIView):
@@ -288,9 +311,12 @@ class ReallocateBudgetView(APIView):
 
 class ChatView(APIView):
     """
-    Chat with AI to modify itinerary.
+    Chat with AI to modify itinerary (ASYNC with Celery).
     
     POST /api/ai/chat/
+    
+    Returns immediately with message_id and status='pending'.
+    Use GET /api/ai/chat/<message_id>/status/ to check progress.
     
     Request Body:
     {
@@ -304,6 +330,7 @@ class ChatView(APIView):
     - Confirmation of proposed changes
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser]
     
     def post(self, request):
         serializer = ChatMessageSerializer(data=request.data)
@@ -321,9 +348,17 @@ class ChatView(APIView):
             user=request.user
         )
         
+        # Check if itinerary is completed
+        if itinerary.status != 'completed':
+            return Response({
+                'status': 'error',
+                'message': 'Cannot chat about an itinerary that is not completed yet'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         # Get conversation history
         chat_history = ChatMessage.objects.filter(
-            itinerary=itinerary
+            itinerary=itinerary,
+            status='completed'
         ).order_by('created_at')[:20]  # Last 20 messages
         
         conversation_history = [
@@ -331,61 +366,89 @@ class ChatView(APIView):
             for msg in chat_history
         ]
         
-        # Save user message
+        # Save user message with 'pending' status
         user_message = ChatMessage.objects.create(
             itinerary=itinerary,
             role='user',
-            message=serializer.validated_data['message']
+            message=serializer.validated_data['message'],
+            status='pending'
         )
         
-        # Proxy to FastAPI
-        result = fastapi_client.chat(
-            itinerary_id=itinerary.fastapi_itinerary_id,
+        # Start async Celery task
+        task = chat_task.delay(
+            user_id=str(request.user.id),
+            chat_message_id=str(user_message.id),
+            itinerary_id=str(itinerary.id),
+            itinerary_fastapi_id=itinerary.fastapi_itinerary_id,
             message=serializer.validated_data['message'],
             conversation_history=conversation_history
         )
         
-        if not result['success']:
-            return Response({
-                'status': 'error',
-                'message': result.get('error', 'Failed to process chat message')
-            }, status=status.HTTP_502_BAD_GATEWAY)
+        # Store task ID
+        user_message.celery_task_id = task.id
+        user_message.save()
         
-        fastapi_data = result['data']
-        
-        # Save assistant response
-        assistant_message = ChatMessage.objects.create(
-            itinerary=itinerary,
-            role='assistant',
-            message=fastapi_data.get('response', ''),
-            modifications_made=fastapi_data.get('modifications_made', False)
-        )
-        
-        # If modifications were made, update local itinerary
-        if fastapi_data.get('modifications_made') and fastapi_data.get('updated_itinerary'):
-            updated_itinerary = fastapi_data['updated_itinerary']
-            destination_info = updated_itinerary.get('destination', {})
-            
-            itinerary.destination = destination_info.get('name', itinerary.destination)
-            itinerary.destination_country = destination_info.get('country', '')
-            itinerary.budget = updated_itinerary.get('total_budget', itinerary.budget)
-            itinerary.duration = updated_itinerary.get('duration', itinerary.duration)
-            itinerary.travelers = updated_itinerary.get('travelers', itinerary.travelers)
-            itinerary.itinerary_data = updated_itinerary
-            itinerary.save()
-            
-            logger.info(f"📝 Itinerary updated via chat: {itinerary.id}")
+        logger.info(f"💬 Chat task queued: {task.id} for {request.user.email}")
         
         return Response({
             'status': 'success',
+            'message': 'Chat message sent. Check status for response.',
             'data': {
-                'response': fastapi_data.get('response'),
-                'modifications_made': fastapi_data.get('modifications_made', False),
-                'requires_confirmation': fastapi_data.get('requires_confirmation', False),
-                'proposed_changes': fastapi_data.get('proposed_changes', {}),
-                'updated_itinerary': fastapi_data.get('updated_itinerary')
+                'message_id': str(user_message.id),
+                'task_id': task.id,
+                'status': 'pending',
+                'status_url': f'/api/ai/chat/{user_message.id}/status/'
             }
-        })
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class ChatStatusView(APIView):
+    """
+    Get chat message status and response.
+    
+    GET /api/ai/chat/<message_id>/status/
+    
+    Returns current status and AI response when completed.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, message_id):
+        user_message = get_object_or_404(
+            ChatMessage,
+            id=message_id,
+            itinerary__user=request.user
+        )
+        
+        response_data = {
+            'status': 'success',
+            'data': {
+                'message_id': str(user_message.id),
+                'task_id': user_message.celery_task_id,
+                'task_status': user_message.status,
+                'user_message': user_message.message,
+            }
+        }
+        
+        if user_message.status == 'completed':
+            # Get assistant response (created after user message)
+            assistant_message = ChatMessage.objects.filter(
+                itinerary=user_message.itinerary,
+                role='assistant',
+                created_at__gt=user_message.created_at
+            ).first()
+            
+            if assistant_message:
+                response_data['data']['response'] = assistant_message.message
+                response_data['data']['modifications_made'] = assistant_message.modifications_made
+                
+                # Include updated itinerary if modifications were made
+                if assistant_message.modifications_made:
+                    response_data['data']['updated_itinerary'] = user_message.itinerary.itinerary_data
+        
+        elif user_message.status == 'failed':
+            response_data['data']['error'] = user_message.error_message
+        
+        return Response(response_data)
 
 
 class ChatHistoryView(APIView):
@@ -403,7 +466,11 @@ class ChatHistoryView(APIView):
             user=request.user
         )
         
-        messages = ChatMessage.objects.filter(itinerary=itinerary).order_by('created_at')
+        messages = ChatMessage.objects.filter(
+            itinerary=itinerary,
+            status='completed'
+        ).order_by('created_at')
+        
         serializer = ChatMessageModelSerializer(messages, many=True)
         
         return Response({
@@ -519,16 +586,19 @@ class UserPhotosView(APIView):
 
 class GenerateVideoView(APIView):
     """
-    Start video generation for an itinerary.
+    Start video generation for an itinerary (ASYNC with Celery).
     
     POST /api/ai/videos/generate/
+    
+    Returns immediately with video_id and status='pending'.
+    Use GET /api/ai/videos/<id>/status/ to check progress.
     
     Integration:
     - Requires JWT authentication
     - Checks video quota (Basic: 0 free, Premium: 3/month, Pro: 5/month)
     - Basic users must pay €5.99 per video
     - Pro users get high quality videos
-    - Proxies to FastAPI /api/generate-video
+    - Queues Celery task to proxy to FastAPI /api/generate-video
     
     Request Body:
     {
@@ -538,6 +608,7 @@ class GenerateVideoView(APIView):
     }
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser]
     
     def post(self, request):
         serializer = GenerateVideoSerializer(data=request.data)
@@ -554,6 +625,13 @@ class GenerateVideoView(APIView):
             id=serializer.validated_data['itinerary_id'],
             user=request.user
         )
+        
+        # Check if itinerary is completed
+        if itinerary.status != 'completed':
+            return Response({
+                'status': 'error',
+                'message': 'Cannot generate video for an incomplete itinerary'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         photo = get_object_or_404(
             UserPhoto,
@@ -579,11 +657,9 @@ class GenerateVideoView(APIView):
         
         # Check if payment is required
         is_free_quota = False
-        payment = None
         
         if requires_payment:
             # Check if user has a pending video purchase payment
-            # This would be set by CreateVideoCheckoutSessionView
             pending_video_purchase = request.data.get('payment_session_verified', False)
             
             if not pending_video_purchase:
@@ -597,52 +673,46 @@ class GenerateVideoView(APIView):
         else:
             is_free_quota = True
         
-        # Proxy to FastAPI
-        logger.info(f"🎬 Starting video generation for {request.user.email}: {itinerary.destination}")
-        
-        result = fastapi_client.generate_video(
-            itinerary_id=itinerary.fastapi_itinerary_id,
-            user_photo_filename=photo.fastapi_filename
-        )
-        
-        if not result['success']:
-            return Response({
-                'status': 'error',
-                'message': result.get('error', 'Failed to start video generation')
-            }, status=status.HTTP_502_BAD_GATEWAY)
-        
-        fastapi_data = result['data']
-        fastapi_video_id = fastapi_data.get('video_id')
-        
-        # Create local video generation record
+        # Create video generation record with 'pending' status
         video = VideoGeneration.objects.create(
             user=request.user,
             itinerary=itinerary,
-            fastapi_video_id=fastapi_video_id,
             quality=requested_quality,
             user_photo=photo,
             status='pending',
             total_days=itinerary.duration,
             is_free_quota=is_free_quota,
-            is_paid=requires_payment,
-            payment=payment
+            is_paid=requires_payment
         )
+        
+        # Start async Celery task
+        task = generate_video_task.delay(
+            user_id=str(request.user.id),
+            video_db_id=str(video.id),
+            itinerary_fastapi_id=itinerary.fastapi_itinerary_id,
+            photo_filename=photo.fastapi_filename
+        )
+        
+        # Store task ID
+        video.celery_task_id = task.id
+        video.save()
         
         # Track usage
         usage_service.record_video_usage(request.user, video, is_free=is_free_quota)
         
-        logger.info(f"✅ Video generation started: {video.id}")
+        logger.info(f"🎬 Video task queued: {task.id} for {request.user.email}")
         
         return Response({
             'status': 'success',
-            'message': 'Video generation started',
+            'message': 'Video generation started. Check status for progress.',
             'data': {
                 'video_id': str(video.id),
-                'fastapi_video_id': fastapi_video_id,
+                'task_id': task.id,
                 'status': 'pending',
-                'is_free_quota': is_free_quota
+                'is_free_quota': is_free_quota,
+                'status_url': f'/api/ai/videos/{video.id}/status/'
             }
-        }, status=status.HTTP_201_CREATED)
+        }, status=status.HTTP_202_ACCEPTED)
 
 
 class VideoStatusView(APIView):
@@ -661,34 +731,6 @@ class VideoStatusView(APIView):
             id=video_id,
             user=request.user
         )
-        
-        # If already completed or failed, return local data
-        if video.status in ['completed', 'failed']:
-            serializer = VideoGenerationSerializer(video)
-            return Response({
-                'status': 'success',
-                'data': serializer.data
-            })
-        
-        # Otherwise, check FastAPI for updates
-        result = fastapi_client.get_video_status(video.fastapi_video_id)
-        
-        if result['success']:
-            fastapi_data = result['data']
-            
-            # Update local record
-            video.status = fastapi_data.get('status', video.status)
-            video.progress = fastapi_data.get('progress', video.progress)
-            video.current_day = fastapi_data.get('current_day', video.current_day)
-            video.current_stage = fastapi_data.get('message', video.current_stage)
-            
-            if fastapi_data.get('status') == 'completed':
-                video.video_url = fastapi_data.get('video_url')
-                video.completed_at = timezone.now()
-            elif fastapi_data.get('status') == 'failed':
-                video.error_message = fastapi_data.get('error')
-            
-            video.save()
         
         serializer = VideoGenerationSerializer(video)
         

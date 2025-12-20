@@ -14,6 +14,7 @@ class Itinerary(models.Model):
     """
     STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('processing', 'Processing'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
     ]
@@ -38,8 +39,10 @@ class Itinerary(models.Model):
     include_flights = models.BooleanField(default=False)
     include_hotels = models.BooleanField(default=False)
     
-    # Status
+    # Status and async tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
     
     # Store the full itinerary data as JSON
     itinerary_data = models.JSONField(null=True, blank=True)
@@ -47,14 +50,15 @@ class Itinerary(models.Model):
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
+    completed_at = models.DateTimeField(blank=True, null=True)
+    
     class Meta:
         db_table = 'itineraries'
         ordering = ['-created_at']
         verbose_name_plural = 'Itineraries'
 
     def __str__(self):
-        return f"{self.user.email} - {self.destination} ({self.duration} days)"
+        return f"{self.destination} - {self.user.email} ({self.status})"
 
 
 class UserPhoto(models.Model):
@@ -94,6 +98,7 @@ class VideoGeneration(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('processing', 'Processing'),
+        ('generating', 'Generating'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
     ]
@@ -127,16 +132,17 @@ class VideoGeneration(models.Model):
         related_name='videos'
     )
     
-    # Status and progress
+    # Status and progress and async tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True)
     progress = models.IntegerField(default=0)  # 0-100
     current_day = models.IntegerField(default=0)
     total_days = models.IntegerField(default=0)
     current_stage = models.CharField(max_length=255, blank=True)
+    error_message = models.TextField(blank=True, null=True)
     
     # Result
     video_url = models.URLField(max_length=500, blank=True, null=True)
-    error_message = models.TextField(blank=True, null=True)
     
     # Payment tracking (for Basic plan users)
     is_paid = models.BooleanField(default=False)
@@ -166,6 +172,13 @@ class ChatMessage(models.Model):
     """
     Track chat messages for itinerary modifications.
     """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
     ROLE_CHOICES = [
         ('user', 'User'),
         ('assistant', 'Assistant'),
@@ -184,6 +197,11 @@ class ChatMessage(models.Model):
     # If modifications were made
     modifications_made = models.BooleanField(default=False)
     
+     # Async processing
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='completed')
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+   
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
 
