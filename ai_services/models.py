@@ -27,7 +27,7 @@ class Itinerary(models.Model):
     )
     
     # FastAPI reference
-    fastapi_itinerary_id = models.CharField(max_length=255, unique=True)
+    fastapi_itinerary_id = models.CharField(max_length=255, blank=True, null=True)
     
     # Itinerary details
     destination = models.CharField(max_length=255)
@@ -121,7 +121,7 @@ class VideoGeneration(models.Model):
     )
     
     # FastAPI reference
-    fastapi_video_id = models.CharField(max_length=255, unique=True)
+    fastapi_video_id = models.CharField(max_length=255, blank=True, null=True)
     
     # Video details
     quality = models.CharField(max_length=20, choices=QUALITY_CHOICES, default='standard')
