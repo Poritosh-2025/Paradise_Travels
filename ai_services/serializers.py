@@ -239,7 +239,11 @@ class VideoGenerationListSerializer(serializers.ModelSerializer):
             'video_url',
             'created_at',
         ]
-
+    
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['video_url'] = f"https://paradiseai.dsrt321.online{instance.video_url}" if instance.video_url else None
+        return ret
 
 class UsageSerializer(serializers.Serializer):
     """Serializer for usage information"""
