@@ -218,9 +218,9 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='poritoshpal98@gmail.com')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='volv dhhv ukwy ween')
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='poritoshpal98@gmail.com')
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='itinerara@gmail.com')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='euhr kaxx aupy suvk')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='itinerara@gmail.com')
 
 # Celery Settings
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')

@@ -10,6 +10,25 @@ Integration Points:
 3. Usage tracking (from payments app)
 4. FastAPI proxy (to AI service on port 8001)
 5. Celery tasks for async processing
+
+Plan Details:
+    Basic (Free):
+        - 1 itinerary per month
+        - 0 free videos (€5.99 per video, UNLIMITED paid videos)
+        - AI Chatbot: FREE
+        - Itinerary Customization: FREE
+        - Social Sharing: FREE
+        
+    Premium (€19.99/month):
+        - Unlimited itineraries
+        - 3 free videos per month
+        - After 3 free videos: €5.99 per video (UNLIMITED)
+        
+    Pro (€39.99/month):
+        - Unlimited itineraries
+        - 5 free videos per month
+        - High quality video
+        - After 5 free videos: €5.99 per video (UNLIMITED)
 """
 from rest_framework.parsers import JSONParser
 import logging
@@ -328,6 +347,8 @@ class ChatView(APIView):
     - Questions about the itinerary
     - Modification requests (destination, budget, duration, etc.)
     - Confirmation of proposed changes
+    
+    NOTE: Chat is FREE for ALL plans (including Basic)
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser]
@@ -456,6 +477,8 @@ class ChatHistoryView(APIView):
     Get chat history for an itinerary.
     
     GET /api/ai/chat/<itinerary_id>/history/
+    
+    NOTE: Chat history is FREE for ALL plans (including Basic)
     """
     permission_classes = [IsAuthenticated]
     
@@ -593,24 +616,28 @@ class GenerateVideoView(APIView):
     Returns immediately with video_id and status='pending'.
     Use GET /api/ai/videos/<id>/status/ to check progress.
     
-    Integration:
-    - Requires JWT authentication
-    - Checks video quota (Basic: 0 free, Premium: 3/month, Pro: 5/month)
-    - Basic users must pay €5.99 per video
-    - Pro users get high quality videos
-    - Queues Celery task to proxy to FastAPI /api/generate-video
+    IMPORTANT BUSINESS LOGIC:
+    - Basic (Free) plan: 0 free videos, €5.99 per video (UNLIMITED paid videos)
+    - Premium plan: 3 free videos/month, then €5.99 each (UNLIMITED)
+    - Pro plan: 5 free videos/month + high quality, then €5.99 each (UNLIMITED)
+    
+    REQUIRED: itinerary_id is REQUIRED for video generation.
     
     Request Body:
     {
-        "itinerary_id": "uuid",
-        "photo_id": "uuid",
-        "quality": "standard"  // or "high" for Pro users
+        "itinerary_id": "uuid",        // REQUIRED
+        "photo_id": "uuid",            // REQUIRED
+        "quality": "standard",         // OPTIONAL - "high" only for Pro plan
+        "payment_session_id": "cs_xxx" // REQUIRED for Basic plan / when quota exhausted
     }
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser]
     
     def post(self, request):
+        import stripe
+        from django.conf import settings
+        
         serializer = GenerateVideoSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({
@@ -619,7 +646,7 @@ class GenerateVideoView(APIView):
                 'errors': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get itinerary and photo
+        # Get itinerary (REQUIRED)
         itinerary = get_object_or_404(
             Itinerary,
             id=serializer.validated_data['itinerary_id'],
@@ -630,9 +657,10 @@ class GenerateVideoView(APIView):
         if itinerary.status != 'completed':
             return Response({
                 'status': 'error',
-                'message': 'Cannot generate video for an incomplete itinerary'
+                'message': 'Cannot generate video for an incomplete itinerary. Please wait for itinerary to complete.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
+        # Get photo (REQUIRED)
         photo = get_object_or_404(
             UserPhoto,
             id=serializer.validated_data['photo_id'],
@@ -659,16 +687,65 @@ class GenerateVideoView(APIView):
         is_free_quota = False
         
         if requires_payment:
-            # Check if user has a pending video purchase payment
-            pending_video_purchase = request.data.get('payment_session_verified', False)
+            # Check for payment session ID
+            payment_session_id = request.data.get('payment_session_id')
             
-            if not pending_video_purchase:
+            if payment_session_id:
+                # Verify payment with Stripe
+                stripe.api_key = settings.STRIPE_SECRET_KEY
+                
+                try:
+                    session = stripe.checkout.Session.retrieve(payment_session_id)
+                    
+                    # Check payment status
+                    if session.payment_status != 'paid':
+                        return Response({
+                            'status': 'error',
+                            'message': f'Payment not completed. Status: {session.payment_status}',
+                            'error_code': 'payment_incomplete'
+                        }, status=status.HTTP_402_PAYMENT_REQUIRED)
+                    
+                    # Verify this payment belongs to the user
+                    session_user_id = session.metadata.get('user_id')
+                    if session_user_id != str(request.user.id):
+                        return Response({
+                            'status': 'error',
+                            'message': 'Payment session does not belong to this user',
+                            'error_code': 'invalid_payment'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    # Check if this session was already used for video generation
+                    already_used = VideoGeneration.objects.filter(
+                        user=request.user,
+                        payment_session_id=payment_session_id
+                    ).exists()
+                    
+                    if already_used:
+                        return Response({
+                            'status': 'error',
+                            'message': 'This payment has already been used for video generation',
+                            'error_code': 'payment_already_used'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    # Payment verified - proceed
+                    logger.info(f"✅ Payment verified for {request.user.email}: {payment_session_id}")
+                    
+                except stripe.error.StripeError as e:
+                    logger.error(f"Stripe error: {e}")
+                    return Response({
+                        'status': 'error',
+                        'message': f'Payment verification failed: {str(e)}',
+                        'error_code': 'payment_verification_failed'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                # No payment session - return payment required
                 return Response({
                     'status': 'error',
                     'message': message,
                     'error_code': 'payment_required',
                     'video_price': usage_service.VIDEO_PRICE,
-                    'checkout_url': '/api/payments/checkout/video/'
+                    'checkout_url': '/api/payments/checkout/video/',
+                    'note': 'You can generate UNLIMITED videos with payment (€5.99 each)'
                 }, status=status.HTTP_402_PAYMENT_REQUIRED)
         else:
             is_free_quota = True
@@ -682,7 +759,8 @@ class GenerateVideoView(APIView):
             status='pending',
             total_days=itinerary.duration,
             is_free_quota=is_free_quota,
-            is_paid=requires_payment
+            is_paid=requires_payment,
+            payment_session_id=request.data.get('payment_session_id')
         )
         
         # Start async Celery task
@@ -710,6 +788,8 @@ class GenerateVideoView(APIView):
                 'task_id': task.id,
                 'status': 'pending',
                 'is_free_quota': is_free_quota,
+                'is_paid': requires_payment,
+                'itinerary_id': str(itinerary.id),
                 'status_url': f'/api/ai/videos/{video.id}/status/'
             }
         }, status=status.HTTP_202_ACCEPTED)
@@ -788,7 +868,7 @@ class UsageView(APIView):
     - Current plan
     - Itinerary usage (used/limit)
     - Video usage (free used/free limit/paid)
-    - Available features
+    - Available features (including FREE features for Basic plan)
     """
     permission_classes = [IsAuthenticated]
     

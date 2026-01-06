@@ -162,24 +162,44 @@ class UserPhotoSerializer(serializers.ModelSerializer):
 
 
 class GenerateVideoSerializer(serializers.Serializer):
-    """Serializer for video generation request"""
+    """
+    Serializer for video generation request.
+    
+    IMPORTANT: itinerary_id is REQUIRED for video generation.
+    
+    Flow:
+    1. Create an itinerary first
+    2. Upload a photo
+    3. Generate video with itinerary_id + photo_id
+    4. For Basic plan users: payment_session_id is required
+    """
     
     QUALITY_CHOICES = [
         ('standard', 'Standard'),
         ('high', 'High'),
     ]
     
+    # itinerary_id is REQUIRED
     itinerary_id = serializers.UUIDField(
-        help_text="ID of the itinerary"
+        required=True,
+        help_text="ID of the itinerary (REQUIRED)"
     )
     photo_id = serializers.UUIDField(
-        help_text="ID of the uploaded user photo"
+        required=True,
+        help_text="ID of the uploaded user photo (REQUIRED)"
     )
     quality = serializers.ChoiceField(
         choices=QUALITY_CHOICES,
         required=False,
         default='standard',
         help_text="Video quality (high only available for Pro plan)"
+    )
+    # Payment session ID for paid video generation
+    payment_session_id = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="Stripe payment session ID (required for Basic plan users or when free quota exhausted)"
     )
 
 
@@ -237,6 +257,8 @@ class VideoGenerationListSerializer(serializers.ModelSerializer):
             'status',
             'progress',
             'video_url',
+            'is_paid',
+            'is_free_quota',
             'created_at',
         ]
     
@@ -244,6 +266,7 @@ class VideoGenerationListSerializer(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         ret['video_url'] = f"https://paradiseai.dsrt321.online{instance.video_url}" if instance.video_url else None
         return ret
+
 
 class UsageSerializer(serializers.Serializer):
     """Serializer for usage information"""

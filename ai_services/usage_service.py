@@ -3,6 +3,25 @@ Usage Service
 
 Handles subscription plan limits and usage tracking.
 Integrates with payments app to enforce plan restrictions.
+
+Plan Details:
+    Basic (Free):
+        - 1 itinerary per month
+        - 0 free videos (€5.99 per video, UNLIMITED paid videos allowed)
+        - AI Chatbot: FREE
+        - Itinerary Customization: FREE
+        - Social Sharing: FREE
+        
+    Premium (€19.99/month):
+        - Unlimited itineraries
+        - 3 free videos per month
+        - After 3 free videos: €5.99 per video (UNLIMITED)
+        
+    Pro (€39.99/month):
+        - Unlimited itineraries
+        - 5 free videos per month
+        - High quality video
+        - After 5 free videos: €5.99 per video (UNLIMITED)
 """
 import logging
 from typing import Dict, Any, Tuple
@@ -15,27 +34,13 @@ logger = logging.getLogger(__name__)
 class UsageService:
     """
     Service for checking and tracking usage against subscription plans.
-    
-    Plan Limits:
-        Basic (Free):
-            - 1 itinerary per month
-            - 0 free videos (€5.99 per video)
-            
-        Premium (€19.99/month):
-            - Unlimited itineraries
-            - 3 free videos per month
-            
-        Pro (€39.99/month):
-            - Unlimited itineraries
-            - 5 free videos per month
-            - High quality video
     """
     
     # Plan configuration
     PLAN_LIMITS = {
         'basic': {
             'itineraries_per_month': 1,
-            'videos_per_month': 0,
+            'videos_per_month': 0,  # 0 free videos, but unlimited PAID videos
             'video_quality': 'standard',
         },
         'premium': {
@@ -50,7 +55,7 @@ class UsageService:
         }
     }
     
-    VIDEO_PRICE = 5.99  # EUR per video for non-subscribers
+    VIDEO_PRICE = 5.99  # EUR per video when payment required
     
     def get_user_plan(self, user) -> str:
         """
@@ -161,7 +166,7 @@ class UsageService:
             created_at__gte=period_start,
             created_at__lt=period_end,
             is_free_quota=True,
-            status__in=['completed', 'processing', 'pending']
+            status__in=['completed', 'processing', 'pending', 'generating']
         ).count()
         
         # Count paid videos
@@ -172,6 +177,12 @@ class UsageService:
             is_paid=True
         ).count()
         
+        # Total videos (all time for this user)
+        total_videos_all_time = VideoGeneration.objects.filter(
+            user=user,
+            status__in=['completed', 'processing', 'pending', 'generating']
+        ).count()
+        
         free_limit = plan_limits['videos_per_month']
         free_remaining = max(0, free_limit - free_videos_used)
         
@@ -180,7 +191,8 @@ class UsageService:
             'free_limit': free_limit,
             'free_remaining': free_remaining,
             'paid_videos': paid_videos,
-            'total_videos': free_videos_used + paid_videos,
+            'total_videos_this_period': free_videos_used + paid_videos,
+            'total_videos_all_time': total_videos_all_time,
             'can_use_free': free_remaining > 0,
             'requires_payment': free_remaining <= 0,
             'video_price': self.VIDEO_PRICE,
@@ -211,6 +223,20 @@ class UsageService:
         """
         Check if user can generate a video.
         
+        Basic Plan Logic:
+        - 0 free videos
+        - UNLIMITED paid videos (€5.99 each)
+        - Always returns (True, True, message) for basic users
+        
+        Premium Plan Logic:
+        - 3 free videos per month
+        - After quota exhausted: €5.99 per video (UNLIMITED)
+        
+        Pro Plan Logic:
+        - 5 free videos per month
+        - High quality video access
+        - After quota exhausted: €5.99 per video (UNLIMITED)
+        
         Args:
             user: User model instance
             
@@ -218,12 +244,18 @@ class UsageService:
             Tuple of (can_generate, requires_payment, message)
         """
         usage = self.get_video_usage(user)
+        plan = usage['plan']
         
         if usage['can_use_free']:
+            # Has free quota remaining
             return True, False, f"Using free video quota ({usage['free_used']}/{usage['free_limit']})"
         else:
-            # Can generate but requires payment
-            return True, True, f"Free video quota exhausted. Video generation costs €{self.VIDEO_PRICE}"
+            # No free quota - requires payment
+            # ALL plans can generate UNLIMITED paid videos
+            if plan == 'basic':
+                return True, True, f"Video generation costs €{self.VIDEO_PRICE}. You can generate unlimited videos with payment."
+            else:
+                return True, True, f"Free video quota exhausted ({usage['free_used']}/{usage['free_limit']}). Additional videos cost €{self.VIDEO_PRICE} each (unlimited)."
     
     def record_itinerary_usage(self, user, itinerary) -> None:
         """
@@ -287,9 +319,11 @@ class UsageService:
             'itineraries': itinerary_usage,
             'videos': video_usage,
             'features': {
-                'chatbot_access': True,  # All plans
-                'customization': True,   # All plans
-                'social_sharing': True,  # All plans
+                # FREE for ALL plans (including Basic)
+                'chatbot_access': True,
+                'customization': True,
+                'social_sharing': True,
+                # Pro plan exclusive features
                 'exclusive_deals': plan == 'pro',
                 'priority_support': plan == 'pro',
                 'high_quality_video': plan == 'pro'

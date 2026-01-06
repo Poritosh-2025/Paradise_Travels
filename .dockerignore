@@ -1,0 +1,98 @@
+# ===========================================
+# PARADISE - Docker Ignore
+# ===========================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Environment files (security)
+.env
+.env.*
+!.env.example
+!.env.staging
+!.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.sqlite3
+*.db
+
+# Static and media
+staticfiles/
+media/
+
+# Backups
+backups/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Docker (don't include compose files in image)
+docker-compose*.yml
+Dockerfile*
+.docker/
+
+# Scripts (except entrypoint)
+*.sh
+!docker-entrypoint.sh
+
+# Misc
+.editorconfig
+.flake8
+.pre-commit-config.yaml
+Makefile
+*.bak
+*.tmp

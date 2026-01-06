@@ -1,6 +1,25 @@
 """
 Models for AI Services - Itinerary and Video tracking.
 Integrates with FastAPI AI service while enforcing subscription limits.
+
+Plan Details:
+    Basic (Free):
+        - 1 itinerary per month
+        - 0 free videos (€5.99 per video, UNLIMITED paid videos)
+        - AI Chatbot: FREE
+        - Itinerary Customization: FREE
+        - Social Sharing: FREE
+        
+    Premium (€19.99/month):
+        - Unlimited itineraries
+        - 3 free videos per month
+        - After 3 free videos: €5.99 per video (UNLIMITED)
+        
+    Pro (€39.99/month):
+        - Unlimited itineraries
+        - 5 free videos per month
+        - High quality video
+        - After 5 free videos: €5.99 per video (UNLIMITED)
 """
 import uuid
 from django.db import models
@@ -94,6 +113,8 @@ class VideoGeneration(models.Model):
     """
     Track video generation requests.
     Used for enforcing plan limits and tracking video usage.
+    
+    IMPORTANT: itinerary_id is REQUIRED for video generation.
     """
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -114,6 +135,8 @@ class VideoGeneration(models.Model):
         on_delete=models.CASCADE,
         related_name='video_generations'
     )
+    
+    # Itinerary is REQUIRED for video generation
     itinerary = models.ForeignKey(
         Itinerary,
         on_delete=models.CASCADE,
@@ -144,9 +167,12 @@ class VideoGeneration(models.Model):
     # Result
     video_url = models.URLField(max_length=500, blank=True, null=True)
     
-    # Payment tracking (for Basic plan users)
+    # Payment tracking
+    # - Basic plan users ALWAYS pay €5.99 per video
+    # - Premium/Pro users use free quota first, then pay €5.99
     is_paid = models.BooleanField(default=False)
     is_free_quota = models.BooleanField(default=False)  # Used free monthly quota
+    payment_session_id = models.CharField(max_length=255, blank=True, null=True) 
     payment = models.ForeignKey(
         'payments.Payment',
         on_delete=models.SET_NULL,
@@ -171,6 +197,8 @@ class VideoGeneration(models.Model):
 class ChatMessage(models.Model):
     """
     Track chat messages for itinerary modifications.
+    
+    NOTE: Chat is FREE for ALL plans (including Basic)
     """
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -197,7 +225,7 @@ class ChatMessage(models.Model):
     # If modifications were made
     modifications_made = models.BooleanField(default=False)
     
-     # Async processing
+    # Async processing
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='completed')
     celery_task_id = models.CharField(max_length=255, blank=True, null=True)
     error_message = models.TextField(blank=True, null=True)

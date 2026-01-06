@@ -1,13 +1,10 @@
 # Django #
-*.log
 *.pot
 *.pyc
 __pycache__
 db.sqlite3
-media
-
-# Backup files # 
-*.bak 
+media/
+local_settings.py
 
 # If you are using PyCharm # 
 # User-specific stuff
@@ -46,8 +43,20 @@ out/
 atlassian-ide-plugin.xml
 
 # Python # 
-*.py[cod] 
-*$py.class 
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Distribution / packaging 
 .Python build/ 
@@ -75,7 +84,6 @@ pip-delete-this-directory.txt
 
 # Unit test / coverage reports 
 htmlcov/ 
-.tox/ 
 .coverage 
 .coverage.* 
 .cache 
@@ -136,8 +144,54 @@ GitHub.sublime-settings
 !.vscode/launch.json 
 !.vscode/extensions.json 
 .history.env
-staticfiles
+staticfiles/
 celerybeat-schedule
 celerybeat.pid
 celeryd.pid
 
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing
+.tox/
+htmlcov/
+.pytest_cache/
+nosetests.xml
+*.cover
+.hypothesis/
+# Backups
+backups/
+*.sql
+*.sql.gz
+*.bak
+*.backup
+# Logs
+logs/
+*.log
+# Docker (local volumes)
+.docker/
+# Misc
+*.tmp
+*.temp
+.cache/

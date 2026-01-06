@@ -1,74 +1,293 @@
-version: "3.8"
+# ===========================================
+# PARADISE - Unified Docker Compose
+# ===========================================
+# Single configuration for ALL environments
+# Behavior controlled via .env file
+#
+# Usage:
+#   Local:      cp .env.example .env && ./dev.sh start
+#   Staging:    cp .env.staging .env && docker compose up -d
+#   Production: cp .env.production .env && docker compose up -d
+# ===========================================
 
 services:
+  # =========================================
+  # PostgreSQL Database
+  # =========================================
   db:
-    image: postgres:15
+    image: postgres:15-alpine
+    container_name: paradise_db_${ENVIRONMENT:-local}
     environment:
       POSTGRES_DB: ${DATABASE_NAME:-paradise_db}
       POSTGRES_USER: ${DATABASE_USER:-paradise_user}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-paradise_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
     ports:
-      - "12011:5432"
+      - "${DB_EXTERNAL_PORT:-12011}:5432"
     networks:
-      - paradise-net
+      - paradise-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # =========================================
+  # Redis Cache & Message Broker
+  # =========================================
   redis:
     image: redis:7-alpine
+    container_name: paradise_redis_${ENVIRONMENT:-local}
+    command: >
+      redis-server 
+      --appendonly yes 
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
     ports:
-      - "12021:6379"
+      - "${REDIS_EXTERNAL_PORT:-12021}:6379"
     networks:
-      - paradise-net
+      - paradise-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # =========================================
+  # Django Web Application
+  # =========================================
   web:
-    build: .
-    # FIXED: Added --timeout 600 (10 minutes)
-    command: gunicorn root.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 1000
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paradise_web:${IMAGE_TAG:-latest}
+    container_name: paradise_web_${ENVIRONMENT:-local}
+    command: ${WEB_COMMAND:-gunicorn root.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 600}
     volumes:
-      - .:/app
+      - ${APP_VOLUME:-.:/app}
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+      - ./logs:/app/logs
     env_file:
       - .env
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-local}
+      - DEBUG=${DEBUG:-False}
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     ports:
-      - "12001:8000"
+      - "${WEB_EXTERNAL_PORT:-12001}:8000"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
-      - paradise-net
-    restart: always
+      - paradise-network
+    user: ${RUN_AS_USER:-paradise}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
+  # =========================================
+  # Celery Worker
+  # =========================================
   celery:
-    build: .
-    command: celery -A root worker -l info
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paradise_web:${IMAGE_TAG:-latest}
+    container_name: paradise_celery_${ENVIRONMENT:-local}
+    command: celery -A root worker -l ${CELERY_LOG_LEVEL:-info} --concurrency=${CELERY_CONCURRENCY:-2}
     volumes:
-      - .:/app
+      - ${APP_VOLUME:-.:/app}
+      - media_volume:/app/media
+      - ./logs:/app/logs
     env_file:
       - .env
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-local}
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_started
     networks:
-      - paradise-net
-    restart: always
+      - paradise-network
+    user: ${RUN_AS_USER:-paradise}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
+  # =========================================
+  # Celery Beat Scheduler
+  # =========================================
   celery-beat:
-    build: .
-    command: celery -A root beat -l info
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paradise_web:${IMAGE_TAG:-latest}
+    container_name: paradise_celery_beat_${ENVIRONMENT:-local}
+    command: celery -A root beat -l ${CELERY_LOG_LEVEL:-info}
     volumes:
-      - .:/app
+      - ${APP_VOLUME:-.:/app}
+      - ./logs:/app/logs
     env_file:
       - .env
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-local}
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_started
     networks:
-      - paradise-net
-    restart: always
+      - paradise-network
+    user: ${RUN_AS_USER:-paradise}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+# =========================================
+# Persistent Volumes
+# =========================================
 volumes:
   postgres_data:
+    name: paradise_postgres_${ENVIRONMENT:-local}
+  redis_data:
+    name: paradise_redis_${ENVIRONMENT:-local}
+  static_volume:
+    name: paradise_static_${ENVIRONMENT:-local}
+  media_volume:
+    name: paradise_media_${ENVIRONMENT:-local}
 
+# =========================================
+# Network
+# =========================================
 networks:
-  paradise-net:
+  paradise-network:
+    name: paradise_network_${ENVIRONMENT:-local}
     driver: bridge
+
+    
+# # version: "3.8"
+
+# services:
+#   db:
+#     image: postgres:15
+#     environment:
+#       POSTGRES_DB: ${DATABASE_NAME:-paradise_db}
+#       POSTGRES_USER: ${DATABASE_USER:-paradise_user}
+#       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-paradise_password}
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     ports:
+#       - "12011:5432"
+#     networks:
+#       - paradise-net
+
+#   redis:
+#     image: redis:7-alpine
+#     ports:
+#       - "12021:6379"
+#     networks:
+#       - paradise-net
+
+#   web:
+#     build: .
+#     # FIXED: Added --timeout 600 (10 minutes)
+#     command: gunicorn root.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 1000
+#     volumes:
+#       - .:/app
+#     env_file:
+#       - .env
+#     ports:
+#       - "12001:8000"
+#     depends_on:
+#       - db
+#       - redis
+#     networks:
+#       - paradise-net
+#     restart: always
+
+#   celery:
+#     build: .
+#     command: celery -A root worker -l info
+#     volumes:
+#       - .:/app
+#     env_file:
+#       - .env
+#     depends_on:
+#       - db
+#       - redis
+#     networks:
+#       - paradise-net
+#     restart: always
+
+#   celery-beat:
+#     build: .
+#     command: celery -A root beat -l info
+#     volumes:
+#       - .:/app
+#     env_file:
+#       - .env
+#     depends_on:
+#       - db
+#       - redis
+#     networks:
+#       - paradise-net
+#     restart: always
+
+# volumes:
+#   postgres_data:
+
+# networks:
+#   paradise-net:
+#     driver: bridge

@@ -1,30 +1,88 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
-# Set environment
+# Build arguments for flexibility
+ARG APP_USER=paradise
+ARG APP_UID=1001
+ARG APP_GID=1001
+
+# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV DJANGO_SETTINGS_MODULE=root.settings
+ENV APP_HOME=/app
 
-WORKDIR /app
+# Set work directory
+WORKDIR ${APP_HOME}
 
-# system deps
+# Install system dependencies
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libpq-dev gcc git curl postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        gcc \
+        git \
+        curl \
+        postgresql-client \
+        netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Install pip requirements
-COPY requirements.txt /app/
-RUN pip install --upgrade pip setuptools
-RUN pip install --no-cache-dir -r requirements.txt
+# Create non-root user
+RUN groupadd --gid ${APP_GID} ${APP_USER} \
+    && useradd --uid ${APP_UID} --gid ${APP_GID} --shell /bin/bash --create-home ${APP_USER}
 
-# Copy project
-COPY . /app/
+# Install Python dependencies
+COPY requirements.txt ${APP_HOME}/
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt
 
-# Make entrypoint executable
-COPY docker-entrypoint.sh /docker-entrypoint.sh
+# Copy application code
+COPY --chown=${APP_USER}:${APP_USER} . ${APP_HOME}/
+
+# Copy and set permissions for entrypoint
+COPY --chown=${APP_USER}:${APP_USER} docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-ENV DJANGO_SETTINGS_MODULE=root.settings
+# Create necessary directories
+RUN mkdir -p ${APP_HOME}/staticfiles ${APP_HOME}/media ${APP_HOME}/logs \
+    && chown -R ${APP_USER}:${APP_USER} ${APP_HOME}
 
+# Expose port
+EXPOSE 8000
+
+# Set entrypoint
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
-CMD ["gunicorn", "root.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+# Default command (overridden by environment)
+CMD ["gunicorn", "root.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "600"]
+
+# FROM python:3.13-slim
+
+# # Set environment
+# ENV PYTHONDONTWRITEBYTECODE=1
+# ENV PYTHONUNBUFFERED=1
+
+# WORKDIR /app
+
+# # system deps
+# RUN apt-get update \
+#     && apt-get install -y --no-install-recommends build-essential libpq-dev gcc git curl postgresql-client \
+#     && rm -rf /var/lib/apt/lists/*
+
+# # Install pip requirements
+# COPY requirements.txt /app/
+# RUN pip install --upgrade pip setuptools
+# RUN pip install --no-cache-dir -r requirements.txt
+
+# # Copy project
+# COPY . /app/
+
+# # Make entrypoint executable
+# COPY docker-entrypoint.sh /docker-entrypoint.sh
+# RUN chmod +x /docker-entrypoint.sh
+
+# ENV DJANGO_SETTINGS_MODULE=root.settings
+
+# ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# CMD ["gunicorn", "root.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
