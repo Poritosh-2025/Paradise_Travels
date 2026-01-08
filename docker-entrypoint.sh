@@ -177,25 +177,3 @@ echo -e "${CYAN}============================================${NC}"
 echo ""
 
 exec "$@"
-
-# #!/bin/bash
-# set -e
-
-# echo "Starting application..."
-
-# # Skip database wait - Django will retry connection
-# echo "Collecting static files..."
-# python manage.py collectstatic --noinput || true
-
-# echo "Applying database migrations..."
-# for i in $(seq 1 5); do
-#   python manage.py migrate --noinput && break
-#   echo "Migration attempt $i failed, retrying in 5 seconds..."
-#   sleep 5
-# done
-
-# echo "Seeding subscription plans..."
-# python manage.py seed_plans || true
-
-# echo "Starting server..."
-# exec "$@"
