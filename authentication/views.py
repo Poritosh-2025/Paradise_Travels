@@ -231,19 +231,20 @@ class LoginView(APIView):
         profile_url = None
         if user.profile_picture:
             profile_url = request.build_absolute_uri(user.profile_picture.url)
-        
+        user=UserProfileSerializer(user).data
         return success_response(
             "Login successful",
             {
-                'user': {
-                    'user_id': str(user.id),
-                    'email': user.email,
-                    'name': user.name,
-                    'phone':user.phone_number,
-                    'role': user.role,
-                    'profile_picture': profile_url,
-                    'is_verified': user.is_verified
-                },
+                'user': user,
+                # {
+                #     'user_id': str(user.id),
+                #     'email': user.email,
+                #     'name': user.name,
+                #     'phone':user.phone_number,
+                #     'role': user.role,
+                #     'profile_picture': profile_url,
+                #     'is_verified': user.is_verified
+                # },
                 'tokens': {
                     'access': str(refresh.access_token),
                     'refresh': str(refresh)
