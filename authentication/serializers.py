@@ -4,7 +4,7 @@ Serializers for authentication endpoints.
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 
-from payments.models import UsageTracking
+from payments.models import UsageTracking, VideoPurchase
 from .models import User
 
 
@@ -129,7 +129,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         ret['is_subscriber'] = instance.is_subscriber
-        ret['can_generate_video'] = True if UsageTracking.objects.filter(user=instance, videos_remaining__gt=0).exists() else False
+        can_generate_video = False
+        if UsageTracking.objects.filter(user=instance, videos_remaining__gt=0).exists():
+            can_generate_video = True
+        if VideoPurchase.objects.filter(user=instance, generation_status="pending").exists():
+            can_generate_video = True
+
+        ret['can_generate_video'] = can_generate_video
         return ret
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
