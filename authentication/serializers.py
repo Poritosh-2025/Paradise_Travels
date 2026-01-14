@@ -124,6 +124,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.profile_picture.url)
         return None
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['is_subscriber'] = instance.is_subscriber
+        ret['can_generate_video'] = instance.can_generate_video
+        return ret
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     """

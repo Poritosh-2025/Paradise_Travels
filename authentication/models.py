@@ -73,6 +73,14 @@ class User(AbstractBaseUser, PermissionsMixin):
         db_table = 'users'
         ordering = ['-created_at']
 
+    @property
+    def is_subscriber(self):
+        return True if self.subscription_status in ['premium', 'pro'] else False
+    
+    @property
+    def can_generate_video(self):
+        return True if self.subscription_status in ['premium', 'pro'] else False
+
     def __str__(self):
         return self.email
 
