@@ -245,6 +245,9 @@ class UsageService:
         """
         usage = self.get_video_usage(user)
         plan = usage['plan']
+
+        if user.can_generate_video:
+            return True, False, "OK"
         
         if usage['can_use_free']:
             # Has free quota remaining
