@@ -9,6 +9,71 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+# update VideoPurchase status helper function  15/01
+def _update_video_purchase_status(video, status):
+    """
+    Sync VideoGeneration status with Payment app's VideoPurchase.
+    
+    This ensures that when a video generation completes or fails in AI Services,
+    the corresponding VideoPurchase record in the Payments app is also updated.
+    
+    Args:
+        video: VideoGeneration instance
+        status: New status ('pending', 'processing', 'completed', 'failed')
+    """
+    try:
+        from payments.models import VideoPurchase
+        
+        # Method 1: Use direct link via video_purchase reverse relation (preferred)
+        try:
+            if hasattr(video, 'video_purchase') and video.video_purchase:
+                video_purchase = video.video_purchase
+                video_purchase.generation_status = status
+                if status == 'completed' and video.video_url:
+                    video_purchase.video_url = video.video_url
+                video_purchase.save()
+                logger.info(f"📊 Updated VideoPurchase status to '{status}' for video {video.id} (via direct link)")
+                return
+        except VideoPurchase.DoesNotExist:
+            pass
+        
+        # Method 2: Find VideoPurchase linked via payment
+        if video.payment:
+            video_purchase = VideoPurchase.objects.filter(payment=video.payment).first()
+            if video_purchase:
+                # Also set the direct link for future use
+                video_purchase.video_generation = video
+                video_purchase.generation_status = status
+                if status == 'completed' and video.video_url:
+                    video_purchase.video_url = video.video_url
+                video_purchase.save()
+                logger.info(f"📊 Updated VideoPurchase status to '{status}' for video {video.id} (via payment link)")
+                return
+        
+        # Method 3: Find by user and recent timestamp (fallback)
+        if video.is_paid and video.payment_session_id:
+            from datetime import timedelta
+            
+            time_window = video.created_at + timedelta(minutes=5)
+            video_purchase = VideoPurchase.objects.filter(
+                user=video.user,
+                video_generation__isnull=True,  # Only match unlinked purchases
+                created_at__lte=time_window,
+                created_at__gte=video.created_at - timedelta(minutes=5)
+            ).order_by('-created_at').first()
+            
+            if video_purchase:
+                # Set the direct link for future use
+                video_purchase.video_generation = video
+                video_purchase.generation_status = status
+                if status == 'completed' and video.video_url:
+                    video_purchase.video_url = video.video_url
+                video_purchase.save()
+                logger.info(f"📊 Updated VideoPurchase status to '{status}' for video {video.id} (via timestamp match)")
+                
+    except Exception as e:
+        logger.warning(f"⚠️ Could not update VideoPurchase status: {e}")
+# End of helper function 15/01
 
 @shared_task(bind=True, max_retries=2, soft_time_limit=600, time_limit=660)
 def create_itinerary_task(self, user_id, itinerary_db_id, request_data):
@@ -139,6 +204,10 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
         video.fastapi_video_id = fastapi_video_id
         video.status = 'generating'
         video.save()
+
+        # update usage for video generation 15/01
+        # Sync processing status with Payment app's VideoPurchase
+        _update_video_purchase_status(video, 'processing')
         
         # Poll for completion (check every 30 seconds, max 20 minutes)
         import time
@@ -160,6 +229,12 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
                     video.video_url = status_data.get('video_url')
                     video.completed_at = timezone.now()
                     video.save()
+
+                    # update usage for video generation 15/01
+                    user = User.objects.get(id=user_id)
+                    usage_service.record_video_usage(user, video)
+                    # Sync status with Payment app's VideoPurchase
+                    _update_video_purchase_status(video, 'completed')
                     
                     logger.info(f"✅ Video generation completed: {video.id}")
                     return {
@@ -172,6 +247,13 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
                     video.status = 'failed'
                     video.error_message = status_data.get('error', 'Video generation failed')
                     video.save()
+
+                    # update usage for video generation 15/01
+                    user = User.objects.get(id=user_id)
+                    usage_service.record_video_usage(user, video)
+                    # Sync status with Payment app's VideoPurchase
+                    _update_video_purchase_status(video, 'failed')
+                    
                     return {'success': False, 'error': video.error_message}
                 
                 video.save()
@@ -180,6 +262,12 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
         video.status = 'failed'
         video.error_message = 'Video generation timed out'
         video.save()
+        # update usage for video generation 15/01
+        user = User.objects.get(id=user_id)
+        usage_service.record_video_usage(user, video)
+        # Sync status with Payment app's VideoPurchase
+        _update_video_purchase_status(video, 'failed')
+
         return {'success': False, 'error': 'Video generation timed out'}
         
     except Exception as e:
@@ -190,6 +278,12 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
             video.status = 'failed'
             video.error_message = str(e)
             video.save()
+
+            # update usage for video generation 15/01
+            user = User.objects.get(id=user_id)
+            usage_service.record_video_usage(user, video)
+            # Sync status with Payment app's VideoPurchase
+            _update_video_purchase_status(video, 'failed')
         except:
             pass
         

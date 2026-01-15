@@ -132,7 +132,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         can_generate_video = False
         if UsageTracking.objects.filter(user=instance, videos_remaining__gt=0).exists():
             can_generate_video = True
-        if VideoPurchase.objects.filter(user=instance, generation_status="pending").exists():
+        if VideoPurchase.objects.filter(user=instance, generation_status__in=["pending", "processing"]).exists():
             can_generate_video = True
 
         ret['can_generate_video'] = can_generate_video

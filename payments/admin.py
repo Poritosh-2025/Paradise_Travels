@@ -44,3 +44,12 @@ class VideoPurchaseAdmin(admin.ModelAdmin):
     list_display = ['user', 'video_quality', 'amount_paid', 'generation_status', 'created_at']
     list_filter = ['video_quality', 'generation_status']
     search_fields = ['user__email']
+    # update 15/01
+    raw_id_fields = ['video_generation']
+    
+    def video_generation_id(self, obj):
+        if obj.video_generation:
+            return str(obj.video_generation.id)[:8] + '...'
+        return '-'
+    video_generation_id.short_description = 'Video Gen ID'
+    # end of update 15/01

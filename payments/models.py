@@ -266,7 +266,16 @@ class VideoPurchase(models.Model):
         null=True,
         related_name='video_purchases'
     )
-    
+    # update 15/01
+    # Direct link to VideoGeneration in ai_services app
+    video_generation = models.OneToOneField(
+        'ai_services.VideoGeneration',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='video_purchase'
+    )
+    # end of update 15/01
     video_quality = models.CharField(max_length=20, choices=QUALITY_CHOICES, default='standard')
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
     generation_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')

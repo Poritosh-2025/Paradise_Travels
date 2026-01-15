@@ -763,6 +763,58 @@ class GenerateVideoView(APIView):
             payment_session_id=request.data.get('payment_session_id')
         )
         
+        # Link VideoPurchase to VideoGeneration (for paid videos)
+        if requires_payment and request.data.get('payment_session_id'):
+            try:
+                from payments.models import VideoPurchase, Payment
+                
+                # Find the VideoPurchase by payment_session_id
+                payment = Payment.objects.filter(
+                    user=request.user,
+                    stripe_payment_intent_id__isnull=False,
+                    payment_type='video_generation'
+                ).order_by('-created_at').first()
+                
+                if payment:
+                    video_purchase = VideoPurchase.objects.filter(
+                        user=request.user,
+                        payment=payment,
+                        video_generation__isnull=True  # Not yet linked
+                    ).order_by('-created_at').first()
+                    
+                    if video_purchase:
+                        video_purchase.video_generation = video
+                        video_purchase.generation_status = 'processing'
+                        video_purchase.save()
+                        
+                        # Also link payment to video
+                        video.payment = payment
+                        video.save()
+                        
+                        logger.info(f"🔗 Linked VideoPurchase {video_purchase.id} to VideoGeneration {video.id}")
+                else:
+                    # Alternative: Find by user and recent timestamp
+                    video_purchase = VideoPurchase.objects.filter(
+                        user=request.user,
+                        video_generation__isnull=True,
+                        generation_status='pending'
+                    ).order_by('-created_at').first()
+                    
+                    if video_purchase:
+                        video_purchase.video_generation = video
+                        video_purchase.generation_status = 'processing'
+                        video_purchase.save()
+                        
+                        # Link payment if exists
+                        if video_purchase.payment:
+                            video.payment = video_purchase.payment
+                            video.save()
+                        
+                        logger.info(f"🔗 Linked VideoPurchase {video_purchase.id} to VideoGeneration {video.id} (via fallback)")
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Could not link VideoPurchase to VideoGeneration: {e}")
+        
         # Start async Celery task
         task = generate_video_task.delay(
             user_id=str(request.user.id),
