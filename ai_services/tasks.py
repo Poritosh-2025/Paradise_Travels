@@ -231,8 +231,6 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
                     video.save()
 
                     # update usage for video generation 15/01
-                    user = User.objects.get(id=user_id)
-                    usage_service.record_video_usage(user, video)
                     # Sync status with Payment app's VideoPurchase
                     _update_video_purchase_status(video, 'completed')
                     
@@ -249,8 +247,6 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
                     video.save()
 
                     # update usage for video generation 15/01
-                    user = User.objects.get(id=user_id)
-                    usage_service.record_video_usage(user, video)
                     # Sync status with Payment app's VideoPurchase
                     _update_video_purchase_status(video, 'failed')
                     
@@ -263,8 +259,6 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
         video.error_message = 'Video generation timed out'
         video.save()
         # update usage for video generation 15/01
-        user = User.objects.get(id=user_id)
-        usage_service.record_video_usage(user, video)
         # Sync status with Payment app's VideoPurchase
         _update_video_purchase_status(video, 'failed')
 
@@ -280,8 +274,6 @@ def generate_video_task(self, user_id, video_db_id, itinerary_fastapi_id, photo_
             video.save()
 
             # update usage for video generation 15/01
-            user = User.objects.get(id=user_id)
-            usage_service.record_video_usage(user, video)
             # Sync status with Payment app's VideoPurchase
             _update_video_purchase_status(video, 'failed')
         except:
