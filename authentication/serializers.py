@@ -11,15 +11,21 @@ from .models import User
 class RegisterSerializer(serializers.Serializer):
     """
     Serializer for user registration.
+    
+    New Logic:
+    - Only block if email exists AND is verified
+    - Allow re-registration for unverified emails
     """
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password])
     re_type_password = serializers.CharField(write_only=True)
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Email already exists")
-        return value.lower()
+        email = value.lower()
+        # Only block if user exists AND is verified
+        if User.objects.filter(email=email, is_verified=True).exists():
+            raise serializers.ValidationError("User with this email already exists")
+        return email
 
     def validate(self, data):
         if data['password'] != data['re_type_password']:
@@ -28,6 +34,19 @@ class RegisterSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         validated_data.pop('re_type_password')
+        email = validated_data['email']
+        password = validated_data['password']
+        
+        # Check for existing unverified user
+        existing_user = User.objects.filter(email=email, is_verified=False).first()
+        
+        if existing_user:
+            # Update existing unverified user's password
+            existing_user.set_password(password)
+            existing_user.save()
+            return existing_user
+        
+        # Create new user
         return User.objects.create_user(**validated_data)
 
 

@@ -60,6 +60,11 @@ class RegisterView(APIView):
     """
     Register new user.
     POST /api/auth/register/
+    
+    New Logic:
+    - If email exists AND verified → Error: "User with this email already exists"
+    - If email exists but NOT verified → Update password, resend OTP
+    - If email doesn't exist → Create new user, send OTP
     """
     permission_classes = [AllowAny]
 
@@ -68,9 +73,18 @@ class RegisterView(APIView):
         if not serializer.is_valid():
             return error_response("Registration failed", serializer.errors)
         
+        email = serializer.validated_data['email'].lower()
+        
+        # Check if this is a re-registration (existing unverified user)
+        is_reregistration = User.objects.filter(email=email, is_verified=False).exists()
+        
+        # Create or update user
         user = serializer.save()
         
-        # Generate OTP
+        # Invalidate old OTPs for this user
+        OTP.objects.filter(user=user, otp_type='registration', is_used=False).update(is_used=True)
+        
+        # Generate new OTP
         otp_code = generate_otp()
         otp = OTP.objects.create(
             user=user,
@@ -79,18 +93,24 @@ class RegisterView(APIView):
             expires_at=get_otp_expiry()
         )
         
-        # Send OTP email (synchronous - no Celery required)
+        # Send OTP email (async with Celery)
         send_otp_email.delay(user.email, otp_code, 'registration')
         
+        # Different message for re-registration vs new registration
+        if is_reregistration:
+            message = "Verification code resent to your email. Please verify to complete registration."
+        else:
+            message = "Registration successful. OTP sent to your email."
+        
         return created_response(
-            "Registration successful. OTP sent to your email.",
+            message,
             {
                 'user_id': str(user.id),
                 'email': user.email,
-                'otp_expires_at': otp.expires_at.isoformat()
+                'otp_expires_at': otp.expires_at.isoformat(),
+                'is_reregistration': is_reregistration
             }
         )
-
 
 class ResendOTPView(APIView):
     """
